@@ -3,7 +3,7 @@
 > **문서는 가볍게, 작업은 자유롭게**
 
 빠르게 열리는 PDF **뷰어**와, 필요할 때만 켜는 **편집기**를 하나로 묶은 프로그램입니다.
-같은 코드로 **웹**과 **Windows**(나중에 macOS·Linux) 설치판을 만듭니다.
+같은 코드로 **웹**과 **Windows** 설치판을 만듭니다 (macOS·Linux는 추후).
 
 - 엔진: **PDFium** (크롬이 쓰는 PDF 엔진)을 WebAssembly로 돌립니다. 모든 처리는 내 컴퓨터 안에서 하고, 파일을 서버로 보내지 않습니다.
 - 데스크톱: **Tauri 2**. Electron과 달리 브라우저를 통째로 싣지 않고 운영체제의 WebView2를 써서 가볍습니다.
@@ -13,7 +13,8 @@
 | 운영체제 | 파일 |
 |---|---|
 | Windows 10/11 | [**Releases**](https://github.com/Geek-ohmtech/air-pdf/releases/latest)의 `AirPDF_0.4.0_x64-setup.exe` (또는 저장소의 [`release/AirPDF_0.4.0_x64-setup.exe`](release/AirPDF_0.4.0_x64-setup.exe)) |
-| Linux (Debian/Ubuntu) | [`release/AirPDF_0.4.0_amd64.deb`](release/AirPDF_0.4.0_amd64.deb) |
+| 웹 | [Releases](https://github.com/Geek-ohmtech/air-pdf/releases/latest)의 `air-pdf-web.zip` — 풀어서 아무 정적 웹 서버에 올리면 됩니다 |
+| macOS · Linux | 추후 지원 |
 
 한 번 설치하면 다음부터는 **자동 업데이트**됩니다: 켤 때 새 버전을 확인하고, 오른쪽 아래 “지금 업데이트”를 누르면 받아서 다시 시작합니다(메뉴 ⋯ → 업데이트 확인). 업데이트 파일은 서명을 확인한 뒤에만 설치합니다.
 
