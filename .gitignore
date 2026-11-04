@@ -1,0 +1,9 @@
+node_modules/
+dist/
+public/vendor/
+src-tauri/target/
+src-tauri/gen/
+*.log
+.DS_Store
+# 설치 파일(.exe/.deb)은 받기 쉽게 저장소에 함께 올린다
+release/*.zip

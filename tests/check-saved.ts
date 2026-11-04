@@ -1,0 +1,15 @@
+import fs from 'node:fs';
+import { init } from '@embedpdf/pdfium';
+import { PdfEngine } from '../src/engine/core.ts';
+import { FontKit } from '../src/engine/fonts.ts';
+const NM = new URL('../node_modules/', import.meta.url).pathname;
+const P: any = await init({ wasmBinary: fs.readFileSync(NM + '@embedpdf/pdfium/dist/pdfium.wasm') } as any);
+const E = new PdfEngine(P, new FontKit({ font: async () => new Uint8Array(), fontSync: () => null, hbWasm: async () => new ArrayBuffer(0) }));
+const id = E.open(fs.readFileSync(process.argv[2]))!.docId!;
+const info = E.info(id);
+console.log('pages', info.pageCount, 'size', fs.statSync(process.argv[2]).size);
+const t0 = E.textData(id, 0).text;
+console.log('p1 has edit', t0.includes('31,500,000'), '| added', t0.includes('검토 완료'), '| table', t0.includes('김철수'));
+console.log('p1 annots', E.annots(id, 0).map(a => a.kind + ':' + a.contents.slice(0, 12)));
+console.log('p3 ocr', E.textData(id, 2).text.replace(/\s+/g, ' ').slice(0, 60));
+console.log('p5 rotation', E.pageGeom(id, 4).rotation, E.pageGeom(id, 5).rotation);

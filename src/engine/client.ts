@@ -1,0 +1,26 @@
+/** 메인 스레드 쪽 엔진 창구. 모든 호출은 비동기(워커와 메시지로) */
+export class EngineClient {
+  private w: Worker;
+  private seq = 0;
+  private pending = new Map<number, { res: (v: any) => void; rej: (e: any) => void; progress?: (p: any) => void }>();
+  ready: Promise<void>;
+
+  constructor() {
+    this.w = new Worker(new URL('./worker.ts', import.meta.url), { type: 'module' });
+    this.w.onmessage = (ev) => {
+      const { id, result, error, progress } = ev.data;
+      const p = this.pending.get(id); if (!p) return;
+      if (progress) { p.progress?.(progress); return; }
+      this.pending.delete(id);
+      error ? p.rej(new Error(error)) : p.res(result);
+    };
+    this.ready = this.call('boot', [new URL('./', document.baseURI).href]);
+  }
+  call<T = any>(method: string, args: any[] = [], opts: { transfer?: Transferable[]; progress?: (p: any) => void } = {}): Promise<T> {
+    const id = ++this.seq;
+    return new Promise<T>((res, rej) => {
+      this.pending.set(id, { res, rej, progress: opts.progress });
+      this.w.postMessage({ id, method, args }, opts.transfer || []);
+    });
+  }
+}

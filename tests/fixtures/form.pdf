@@ -1,0 +1,62 @@
+%PDF-1.4
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R 5 0 R 6 0 R 8 0 R] /DA (/Helv 0 Tf 0 g) /DR << /Font << /Helv 7 0 R >> >> >> >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R] /Count 1 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Annots [4 0 R 5 0 R 6 0 R 8 0 R] /Resources << /Font << /F1 7 0 R >> >> /Contents 11 0 R >>
+endobj
+4 0 obj
+<< /Type /Annot /Subtype /Widget /FT /Tx /T (name) /Rect [100 700 300 724] /DA (/Helv 12 Tf 0 g) /F 4 /P 3 0 R >>
+endobj
+5 0 obj
+<< /Type /Annot /Subtype /Widget /FT /Btn /T (agree) /Rect [100 650 116 666] /F 4 /P 3 0 R /V /Off /AS /Off /MK << /CA (4) >> /AP << /N << /Yes 9 0 R /Off 10 0 R >> >> >>
+endobj
+6 0 obj
+<< /Type /Annot /Subtype /Widget /FT /Ch /Ff 131072 /T (city) /Rect [100 600 300 624] /Opt [(Seoul) (Busan) (Daegu)] /DA (/Helv 12 Tf 0 g) /F 4 /P 3 0 R >>
+endobj
+7 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>
+endobj
+8 0 obj
+<< /Type /Annot /Subtype /Widget /FT /Tx /Ff 4096 /T (memo) /Rect [100 450 300 560] /DA (/Helv 10 Tf 0 g) /F 4 /P 3 0 R >>
+endobj
+9 0 obj
+<< /Type /XObject /Subtype /Form /BBox [0 0 16 16] /Length 20 >>
+stream
+0 g 3 3 10 10 re f
+endstream
+endobj
+10 0 obj
+<< /Type /XObject /Subtype /Form /BBox [0 0 16 16] /Length 0 >>
+stream
+
+endstream
+endobj
+11 0 obj
+<< /Length 150 >>
+stream
+BT /F1 11 Tf 100 730 Td (Name) Tj ET BT /F1 11 Tf 124 655 Td (I agree) Tj ET BT /F1 11 Tf 100 630 Td (City) Tj ET BT /F1 11 Tf 100 565 Td (Memo) Tj ET
+endstream
+endobj
+xref
+0 12
+0000000000 65535 f 
+0000000009 00000 n 
+0000000163 00000 n 
+0000000220 00000 n 
+0000000381 00000 n 
+0000000510 00000 n 
+0000000696 00000 n 
+0000000867 00000 n 
+0000000964 00000 n 
+0000001102 00000 n 
+0000001218 00000 n 
+0000001316 00000 n 
+trailer
+<< /Size 12 /Root 1 0 R >>
+startxref
+1518
+%%EOF
