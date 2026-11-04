@@ -17,23 +17,6 @@ type Mode = 'view' | 'edit';
 const PREF = 'airpdf.prefs';
 export const fmtSize = (n: number) => n < 1048576 ? `${Math.max(1, Math.round(n / 1024))}KB` : `${(n / 1048576).toFixed(2)}MB`;
 
-/** 앱 아이콘 (public/icon.svg와 같은 그림). 한 화면에 여러 개 넣어도 id가 겹치지 않게 접두어를 붙인다 */
-const ICON_BODY = `  <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#2f6fdc"/><stop offset="1" stop-color="#173a8c"/></linearGradient>
-    <linearGradient id="fe" x1="0" y1="1" x2="1" y2="0"><stop offset="0" stop-color="#7cc4ff"/><stop offset="1" stop-color="#c9ecff"/></linearGradient>
-  </defs>
-  <rect x="32" y="32" width="960" height="960" rx="220" fill="url(#bg)"/>
-  <g fill="none" stroke="#fff" stroke-linecap="round" stroke-linejoin="round" stroke-width="78">
-    <path d="M232 726 L372 318 L512 726"/>
-    <path d="M612 488 V726"/>
-    <path d="M722 726 V488 M722 590 C736 520 790 484 852 492"/>
-  </g>
-  <circle cx="612" cy="368" r="46" fill="#fff"/>
-  <!-- A의 가로획 대신 깃털 -->
-  <path d="M168 684 C280 606 420 536 584 446 C520 586 380 690 168 684 Z" fill="url(#fe)"/>
-  <path d="M200 670 C330 604 450 540 566 462" fill="none" stroke="#2f6fdc" stroke-width="10" stroke-linecap="round" opacity=".55"/>
-`;
-const appIcon = (p: string) => `<svg viewBox="0 0 1024 1024" aria-hidden="true">${ICON_BODY.replace(/id="(\w+)"/g, `id="${p}$1"`).replace(/url\(#(\w+)\)/g, `url(#${p}$1)`)}</svg>`;
 export class App {
   engine: EngineClient; platform: Platform;
   root: HTMLElement; ribbon: HTMLElement; stage: HTMLElement; status: HTMLElement;
@@ -196,7 +179,7 @@ export class App {
     const inner = h('div', { class: 'tb-inner' },
       h('div', { class: 'tb-group' },
         this.tb('sidebar', '탐색 패널 (F12)', () => this.toggleSidebar()),
-        h('span', { class: 'brand' }, h('span', { class: 'brand-mark', html: appIcon('tb') }), h('span', { class: 'brand-name' }, 'Air PDF')),
+        h('span', { class: 'brand' }, h('img', { class: 'brand-mark', src: 'icon-64.png', alt: '' }), h('span', { class: 'brand-name' }, 'Air PDF')),
         this.tb('open', '열기 (Ctrl+O)', () => this.pickAndOpen()),
         this.saveBtn),
       h('div', { class: 'tb-group nav-group needs-doc' },
@@ -219,8 +202,7 @@ export class App {
     const recent = this.platform.recent();
     return h('div', { class: 'start' },
       h('div', { class: 'start-card' },
-        h('div', { class: 'start-mark', html: appIcon('st') }),
-        h('h1', { class: 'start-logo' }, 'Air', h('span', {}, ' PDF')),
+        h('h1', { class: 'start-logo' }, h('img', { class: 'logo-light', src: 'logo.png', alt: 'Air PDF' }), h('img', { class: 'logo-dark', src: 'logo-dark.png', alt: 'Air PDF' })),
         h('p', { class: 'start-slogan' }, '문서는 가볍게, 작업은 자유롭게'),
         h('p', { class: 'start-sub' }, '빠르게 보고, 필요할 때만 편집 모드로 고칩니다.'),
         h('div', { class: 'start-btns' }, h('button', { class: 'btn primary big', type: 'button', onclick: () => this.pickAndOpen() }, icon('open'), 'PDF 열기'),

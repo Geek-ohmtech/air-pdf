@@ -1,4 +1,5 @@
-<p align="center"><img src="docs/icon.png" width="96" alt="Air PDF 아이콘"></p>
+<p align="center"><img src="docs/brand/icon.png" width="96" alt="Air PDF 아이콘"></p>
+<p align="center"><img src="docs/brand/logo.png" width="360" alt="Air PDF"></p>
 
 # Air PDF
 
@@ -14,7 +15,7 @@
 
 | 운영체제 | 파일 |
 |---|---|
-| Windows 10/11 | [`release/AirPDF_0.4.0_x64-setup.exe`](release/AirPDF_0.4.0_x64-setup.exe) — 누른 뒤 오른쪽의 다운로드(↓) 단추 |
+| Windows 10/11 | [`release/AirPDF_0.4.1_x64-setup.exe`](release/AirPDF_0.4.1_x64-setup.exe) — 누른 뒤 오른쪽의 다운로드(↓) 단추 |
 | 웹 | `npm run build`로 만든 `dist/` 폴더를 아무 정적 웹 서버에 올리면 됩니다 (아래 “웹판을 바로 쓸 수 있게 올리기”) |
 | macOS · Linux | 추후 지원 |
 
