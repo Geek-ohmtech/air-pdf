@@ -1,7 +1,7 @@
 {
   "name": "air-pdf",
   "private": true,
-  "version": "0.3.0",
+  "version": "0.4.0",
   "type": "module",
   "description": "가볍고 빠른 PDF 뷰어 + 편집기 (웹 / Windows / macOS / Linux)",
   "scripts": {
@@ -20,10 +20,15 @@
     "@tauri-apps/api": "^2.9.0",
     "@tauri-apps/plugin-dialog": "^2.4.0",
     "@tauri-apps/plugin-opener": "^2.5.0",
+    "@tauri-apps/plugin-process": "^2.4.0",
+    "@tauri-apps/plugin-updater": "^2.14.1",
     "harfbuzzjs": "1.6.4",
     "tesseract.js": "7.0.0"
   },
   "devDependencies": {
+    "@expo-google-fonts/nanum-gothic": "^0.4.0",
+    "@expo-google-fonts/nanum-myeongjo": "^0.4.1",
+    "@expo-google-fonts/nanum-pen-script": "^0.4.0",
     "@expo-google-fonts/noto-sans-kr": "0.4.4",
     "@tauri-apps/cli": "^2.9.0",
     "@tesseract.js-data/eng": "1.0.0",

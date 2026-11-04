@@ -1,8 +1,10 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Air PDF 기본 권한: 파일 대화상자, 링크 열기, 창 제목/전체 화면",
-  "windows": ["main"],
+  "description": "Air PDF 기본 권한: 파일 대화상자, 링크 열기, 창 제목/전체 화면, 자동 업데이트",
+  "windows": [
+    "main"
+  ],
   "permissions": [
     "core:default",
     "core:window:allow-set-title",
@@ -13,6 +15,9 @@
     "dialog:allow-save",
     "dialog:allow-message",
     "dialog:allow-ask",
-    "opener:allow-open-url"
+    "opener:allow-open-url",
+    "updater:default",
+    "process:allow-restart",
+    "opener:allow-reveal-item-in-dir"
   ]
 }

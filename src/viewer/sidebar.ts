@@ -15,10 +15,12 @@ export class Sidebar {
   private thumbObs: IntersectionObserver;
   private thumbDone = new Map<number, number>(); // key → version
   selected = new Set<number>(); // 고른 쪽(키)
-  editable = false;
+  editable = true;
   onMovePage: (key: number, to: number) => void = () => {};
   onThumbMenu: (e: MouseEvent, index: number) => void = () => {};
   onSearchPick: (hit: SearchHit) => void = () => {};
+  onDeleteKey: () => void = () => {};
+  onDropFiles: (files: File[], at: number) => void = () => {};
   private searchList: HTMLElement; private searchHead: HTMLElement;
 
   constructor(parent: HTMLElement, view: DocView) {
@@ -27,7 +29,7 @@ export class Sidebar {
     this.body = h('div', { class: 'side-body' });
     this.el = h('aside', { class: 'sidebar', 'aria-label': '탐색 패널' }, this.tabs, this.body);
     parent.prepend(this.el);
-    this.thumbList = h('div', { class: 'thumbs' });
+    this.thumbList = h('div', { class: 'thumbs', tabindex: '0', 'aria-label': '쪽 목록. 끌어서 순서 바꾸기, Delete로 지우기, 다른 PDF를 끌어 놓아 넣기' });
     this.addPanel('thumbs', '쪽', 'thumbs', this.thumbList);
     this.addPanel('outline', '목차', 'outline', h('div', { class: 'outline' }, h('p', { class: 'empty' }, '목차가 없는 문서입니다.')));
     this.searchHead = h('div', { class: 'search-head' });
@@ -95,8 +97,22 @@ export class Sidebar {
       const i = +it.dataset.i!, key = +it.dataset.key!;
       if (this.editable && (e.ctrlKey || e.metaKey)) { this.selected.has(key) ? this.selected.delete(key) : this.selected.add(key); anchor = i; }
       else if (this.editable && e.shiftKey && anchor >= 0) { this.selected.clear(); for (let k = Math.min(anchor, i); k <= Math.max(anchor, i); k++) this.selected.add(this.view.pages[k].key); }
-      else { this.selected.clear(); anchor = i; this.view.scrollToPage(i); if (innerWidth < 860) this.el.hidden = true; }
+      else { this.selected.clear(); this.selected.add(key); anchor = i; this.view.scrollToPage(i); if (innerWidth < 860) this.el.hidden = true; }
       this.paintPicked();
+      this.thumbList.focus({ preventScroll: true });
+    });
+    this.thumbList.addEventListener('keydown', e => {
+      if (!this.editable) return;
+      const mod = e.ctrlKey || e.metaKey;
+      if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); e.stopPropagation(); this.onDeleteKey(); }
+      else if (mod && e.key.toLowerCase() === 'a') { e.preventDefault(); e.stopPropagation(); this.view.pages.forEach(p => this.selected.add(p.key)); this.paintPicked(); }
+      else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault(); e.stopPropagation();
+        const i = Math.max(0, Math.min(this.view.pages.length - 1, this.view.current + (e.key === 'ArrowDown' ? 1 : -1)));
+        if (!e.shiftKey) this.selected.clear();
+        this.selected.add(this.view.pages[i].key); anchor = i;
+        this.view.scrollToPage(i); this.paintPicked();
+      }
     });
     this.thumbList.addEventListener('contextmenu', e => {
       const it = (e.target as HTMLElement).closest('.thumb') as HTMLElement | null; if (!it) return;
@@ -110,14 +126,40 @@ export class Sidebar {
       dragKey = +it.dataset.key!; it.classList.add('dragging'); e.dataTransfer!.effectAllowed = 'move'; e.dataTransfer!.setData('text/plain', String(dragKey));
     });
     const clearMarks = () => this.thumbList.querySelectorAll('.drop-before, .drop-after, .dragging').forEach(x => x.classList.remove('drop-before', 'drop-after', 'dragging'));
+    const isFiles = (e: DragEvent) => [...(e.dataTransfer?.types || [])].includes('Files');
+    const dropIndex = (e: DragEvent) => {
+      const it = (e.target as HTMLElement).closest('.thumb') as HTMLElement | null;
+      if (!it) return this.view.pages.length;
+      const r = it.getBoundingClientRect();
+      return +it.dataset.i! + (e.clientY < r.top + r.height / 2 ? 0 : 1);
+    };
     this.thumbList.addEventListener('dragover', e => {
+      if (isFiles(e) && this.editable && this.view.pages.length) {
+        e.preventDefault(); e.stopPropagation(); e.dataTransfer!.dropEffect = 'copy';
+        document.body.classList.add('drop-in-thumbs');
+        const it = (e.target as HTMLElement).closest('.thumb') as HTMLElement | null;
+        this.thumbList.querySelectorAll('.drop-before, .drop-after').forEach(x => x.classList.remove('drop-before', 'drop-after'));
+        const last = this.thumbList.lastElementChild as HTMLElement | null;
+        if (it) { const r = it.getBoundingClientRect(); it.classList.add(e.clientY < r.top + r.height / 2 ? 'drop-before' : 'drop-after'); }
+        else last?.classList.add('drop-after');
+        return;
+      }
       if (dragKey < 0) return; e.preventDefault(); e.stopPropagation();
       const it = (e.target as HTMLElement).closest('.thumb') as HTMLElement | null;
       this.thumbList.querySelectorAll('.drop-before, .drop-after').forEach(x => x.classList.remove('drop-before', 'drop-after'));
       if (!it) return;
       const r = it.getBoundingClientRect(); it.classList.add(e.clientY < r.top + r.height / 2 ? 'drop-before' : 'drop-after');
     });
+    this.thumbList.addEventListener('dragleave', e => { if (!this.thumbList.contains(e.relatedTarget as Node)) { document.body.classList.remove('drop-in-thumbs'); clearMarks(); } });
     this.thumbList.addEventListener('drop', e => {
+      if (isFiles(e) && this.editable && this.view.pages.length) {
+        e.preventDefault(); e.stopPropagation();
+        document.body.classList.remove('drop-in-thumbs');
+        const at = dropIndex(e); clearMarks();
+        window.dispatchEvent(new Event('airpdf-drop-done'));
+        this.onDropFiles([...e.dataTransfer!.files], at);
+        return;
+      }
       if (dragKey < 0) return; e.preventDefault(); e.stopPropagation();
       const it = (e.target as HTMLElement).closest('.thumb') as HTMLElement | null;
       if (it && +it.dataset.key! !== dragKey) {

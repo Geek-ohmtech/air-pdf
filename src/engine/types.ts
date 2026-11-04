@@ -17,4 +17,4 @@ export interface TextRun {
   bold: boolean; italic: boolean; embedded: boolean; invisible: boolean; origin: { x: number; y: number }; angle: number;
   inForm?: boolean;
 }
-export interface PageObjInfo { h: number; type: 'image' | 'path' | 'form'; rect: Rect; inForm?: boolean }
+export interface PageObjInfo { h: number; type: 'image' | 'path' | 'form' | 'shape' | 'free' | 'textbox'; rect: Rect; inForm?: boolean; meta?: any; objs?: number[] }

@@ -645,6 +645,68 @@ export class PdfEngine {
     return ok;
   }
 
+  /** 영역 안의 글자만 지운다. 그림·선·표 테두리는 남긴다. 되돌릴 수 없다. */
+  redactText(docId: number, key: number, rect: Rect) {
+    const d = this.D(docId); const pc = this.pageByKey(d, key);
+    const p1 = this.toPage(pc, rect.x, rect.y), p2 = this.toPage(pc, rect.x + rect.w, rect.y + rect.h);
+    const L = Math.min(p1[0], p2[0]), R = Math.max(p1[0], p2[0]), B = Math.min(p1[1], p2[1]), T = Math.max(p1[1], p2[1]);
+    const hit = (b: number[] | null) => !!b && b[0] < R && b[2] > L && b[1] < T && b[3] > B;
+    // 양식 안 글자는 먼저 쪽으로 꺼낸다
+    const nested: number[] = [];
+    this.walk(pc, (o, t, fm) => { if (t === OBJ_TEXT && fm) { const b = this.objBounds(o); if (b && hit(this.mapBounds(b, fm))) nested.push(o); } });
+    this.liftObjs(d, pc, nested);
+    // 글자가 아닌 객체(그림·선·양식)는 잠시 떼어 두었다가 다시 붙인다
+    const keep: { h: number; idx: number }[] = [];
+    const n = this.P.FPDFPage_CountObjects(pc.page);
+    for (let i = 0; i < n; i++) { const o = this.P.FPDFPage_GetObject(pc.page, i); if (this.P.FPDFPageObj_GetType(o) !== OBJ_TEXT && hit(this.objBounds(o))) keep.push({ h: o, idx: i }); }
+    for (const k of keep) this.P.FPDFPage_RemoveObject(pc.page, k.h);
+    const rp = this.malloc(16);
+    this.setF32(rp, [L, T, R, B]); // left top right bottom
+    const ok = this.P.EPDFText_RedactInRect(pc.page, rp, false, false);
+    this.free(rp);
+    for (const k of keep) this.P.FPDFPage_InsertObjectAtIndex(pc.page, k.h, Math.min(k.idx, this.P.FPDFPage_CountObjects(pc.page)));
+    this.touch(pc);
+    return ok;
+  }
+
+  /** 글자 객체의 색·굵게를 바꾼다. 되돌리기용으로 바꾸기 전 상태를 돌려준다 */
+  setTextStyle(docId: number, key: number, objs: number[], style: { color?: string; bold?: boolean }) {
+    const d = this.D(docId); const pc = this.pageByKey(d, key);
+    const also = this.liftObjs(d, pc, objs);
+    const before = objs.map(o => this.textStyleOf(o));
+    for (const o of objs) {
+      const cur = this.textStyleOf(o);
+      const rgb = style.color ? [...fromHex(style.color), cur.fill[3]] : cur.fill;
+      this.P.FPDFPageObj_SetFillColor(o, rgb[0], rgb[1], rgb[2], rgb[3]);
+      const bold = style.bold ?? cur.mode === TEXTMODE_FILL_STROKE;
+      if (cur.mode === TEXTMODE_INVISIBLE) continue;
+      if (bold) this.fakeBold(o, rgb, this.fontSize(o) * Math.hypot(...this.objMatrix(o).slice(2, 4) as [number, number]));
+      else this.P.FPDFTextObj_SetTextRenderMode(o, TEXTMODE_FILL);
+    }
+    this.touch(pc);
+    return { before, also };
+  }
+  restoreTextStyle(docId: number, key: number, states: { h: number; fill: number[]; stroke: number[]; width: number; mode: number }[]) {
+    const d = this.D(docId); const pc = this.pageByKey(d, key);
+    for (const s of states) {
+      this.P.FPDFPageObj_SetFillColor(s.h, s.fill[0], s.fill[1], s.fill[2], s.fill[3]);
+      this.P.FPDFPageObj_SetStrokeColor(s.h, s.stroke[0], s.stroke[1], s.stroke[2], s.stroke[3]);
+      this.P.FPDFPageObj_SetStrokeWidth(s.h, s.width);
+      this.P.FPDFTextObj_SetTextRenderMode(s.h, s.mode);
+    }
+    this.touch(pc);
+    return true;
+  }
+  private textStyleOf(o: number) {
+    const p = this.malloc(20);
+    this.P.FPDFPageObj_GetStrokeColor(o, p, p + 4, p + 8, p + 12);
+    const stroke = this.u32(p, 4);
+    this.P.FPDFPageObj_GetStrokeWidth(o, p + 16);
+    const width = this.f32(p + 16, 1)[0];
+    this.free(p);
+    return { h: o, fill: this.objColor(o), stroke, width, mode: this.P.FPDFTextObj_GetTextRenderMode(o) };
+  }
+
   /* ───────────── 원본 글자 편집 (페이지 객체) ───────────── */
   private objMatrix(o: number): M6 { const p = this.malloc(24); this.P.FPDFPageObj_GetMatrix(o, p); const m = this.f32(p, 6) as M6; this.free(p); return m; }
   private objBounds(o: number) { const p = this.malloc(16); const ok = this.P.FPDFPageObj_GetBounds(o, p, p + 4, p + 8, p + 12); const v = this.f32(p, 4); this.free(p); return ok ? v : null; } // l b r t
@@ -666,6 +728,7 @@ export class PdfEngine {
       if (t !== OBJ_TEXT) return;
       const text = this.objText(o, tp);
       if (!text || !text.trim()) return;
+      if (!fm && this.P.FPDFPageObj_CountMarks(o) && this.metaOf(o)?.t === 'tb') return; // 글상자 글자는 글상자로 고친다
       let b = this.objBounds(o); if (!b) return;
       let m = this.objMatrix(o);
       if (fm) { m = mul(m, fm); b = this.mapBounds(b, fm); }
@@ -729,7 +792,7 @@ export class PdfEngine {
    * - 없으면 Noto Sans KR 부분 글꼴을 문서에 넣어 진짜 글자(벡터)로 쓴다. 이미지로 바꾸지 않는다.
    * 원래 객체는 떼어 두었다가 되돌리기에 쓴다.
    */
-  async editRun(docId: number, key: number, objs: number[], newText: string): Promise<ObjChange> {
+  async editRun(docId: number, key: number, objs: number[], newText: string, opts: { font?: string } = {}): Promise<ObjChange> {
     const d = this.D(docId); const pc = this.pageByKey(d, key);
     const also = this.liftObjs(d, pc, objs);
     const first = objs[0];
@@ -739,13 +802,14 @@ export class PdfEngine {
     const chars = [...new Set([...lines.join('')])];
     const known = this.fontChars(pc, font);
     const embedded = !!this.P.FPDFFont_GetIsEmbedded(font);
-    const reuse = chars.every(c => known.has(c) || c === ' ' || (!embedded && c.charCodeAt(0) < 256));
+    const reuse = !opts.font && chars.every(c => known.has(c) || c === ' ' || (!embedded && c.charCodeAt(0) < 256));
     const splitWords = reuse && embedded && !known.has(' ') && lines.some(l => l.includes(' '));
     let useFont = font, fake = false;
     if (!reuse) {
       const name = this.fontName(font);
       fake = this.P.FPDFFont_GetWeight(font) >= 600 || /Bold|Black|Heavy/i.test(name);
-      useFont = await this.loadSubsetFont(d, lines.join(''));
+      const sub = opts.font || (/myeongjo|myungjo|batang|times|serif|mincho|song|gungsuh|명조|바탕|궁서|garamond|georgia/i.test(name) ? 'nanum-myeongjo' : 'noto-sans');
+      useFont = await this.loadSubsetFont(d, lines.join(''), sub);
     }
     const index = this.objIndex(pc, first);
     const removed = objs.map(o => ({ h: o, idx: this.objIndex(pc, o) }));
@@ -792,8 +856,8 @@ export class PdfEngine {
     return n;
   }
   private gen(d: DocCtx, key: number) { return d.gen.get(key) || 0; }
-  private async loadSubsetFont(d: DocCtx, text: string) {
-    const sub = await this.fonts.subset(text + ' ');
+  private async loadSubsetFont(d: DocCtx, text: string, fontId = 'noto-sans') {
+    const sub = await this.fonts.subset(text + ' ', fontId);
     const p = this.put(sub);
     const f = this.P.FPDFText_LoadFont(d.doc, p, sub.length, FONT_TRUETYPE, true);
     this.free(p);
@@ -802,6 +866,9 @@ export class PdfEngine {
   }
 
   pageGen(docId: number, key: number) { return this.gen(this.D(docId), key); }
+  /** 컴퓨터 글꼴을 엔진에 등록 (이후 font id로 쓴다) */
+  registerFont(id: string, bytes: Uint8Array, index = 0) { this.fonts.register(id, bytes, index); return true; }
+  hasFont(id: string) { return this.fonts.has(id); }
 
   /* ───────────── 양식(Form XObject) 안의 객체 ───────────── */
   /** 쪽의 객체를 양식 안까지 훑는다. fm: 그 객체가 든 양식 공간 → 쪽 공간 행렬 (쪽에 바로 있으면 null) */
@@ -926,13 +993,14 @@ export class PdfEngine {
     this.touch(pc); return true;
   }
   /** 화면 좌표 dx,dy만큼 이동 (scale이 있으면 기준점 둘레로 확대) */
-  transformObjs(docId: number, key: number, gen: number, objs: number[], dx: number, dy: number, scale = 1, about?: { x: number; y: number }) {
+  transformObjs(docId: number, key: number, gen: number, objs: number[], dx: number, dy: number, scale: number | [number, number] = 1, about?: { x: number; y: number }) {
     const d = this.D(docId); if (this.gen(d, key) !== gen) return false;
     const pc = this.pageByKey(d, key);
     const also = this.liftObjs(d, pc, objs);
     // 화면 공간 변환 T를 페이지 공간으로: inv ∘ T ∘ m  (m: page→disp)
     const ax = about?.x ?? 0, ay = about?.y ?? 0;
-    const T: M6 = [scale, 0, 0, scale, ax - ax * scale + dx, ay - ay * scale + dy];
+    const [sx, sy] = Array.isArray(scale) ? scale : [scale, scale];
+    const T: M6 = [sx, 0, 0, sy, ax - ax * sx + dx, ay - ay * sy + dy];
     const PT = mul(mul(pc.m, T), pc.inv);
     for (const o of objs) this.P.FPDFPageObj_Transform(o, PT[0], PT[1], PT[2], PT[3], PT[4], PT[5]);
     this.touch(pc); return also.length ? { also } : true;
@@ -942,22 +1010,37 @@ export class PdfEngine {
   pageObjects(docId: number, key: number): PageObjInfo[] {
     const d = this.D(docId); const pc = this.pageByKey(d, key);
     const out: PageObjInfo[] = [];
+    const groups = new Map<string, PageObjInfo & { b: number[] }>();
     this.walk(pc, (o, t, fm) => {
-      if (t !== OBJ_IMAGE && t !== OBJ_PATH) return;
+      if (t !== OBJ_IMAGE && t !== OBJ_PATH && t !== OBJ_TEXT) return;
+      const meta = !fm && t !== OBJ_IMAGE ? this.metaOf(o) : null;
+      if (t === OBJ_TEXT && meta?.t !== 'tb') return;
       let b = this.objBounds(o); if (!b) return;
       if (fm) b = this.mapBounds(b, fm);
+      if (meta?.t === 'tb') {
+        const gr = groups.get(meta.g);
+        if (gr) { gr.objs!.push(o); gr.b = [Math.min(gr.b[0], b[0]), Math.min(gr.b[1], b[1]), Math.max(gr.b[2], b[2]), Math.max(gr.b[3], b[3])]; }
+        else { const it = { h: o, type: 'textbox' as const, rect: { x: 0, y: 0, w: 0, h: 0 }, objs: [o], meta, b }; groups.set(meta.g, it); out.push(it); }
+        return;
+      }
       const rect = this.toDisp(pc, b[0], b[1], b[2], b[3]);
-      if (t === OBJ_PATH && (rect.w > pc.w * 0.95 && rect.h > pc.h * 0.95)) return; // 페이지 배경
-      out.push({ h: o, type: t === OBJ_IMAGE ? 'image' : 'path', rect, inForm: !!fm });
+      if (t === OBJ_PATH && !meta && (rect.w > pc.w * 0.95 && rect.h > pc.h * 0.95)) return; // 페이지 배경
+      out.push({ h: o, type: t === OBJ_IMAGE ? 'image' : meta?.t === 'shape' ? 'shape' : meta?.t === 'free' ? 'free' : 'path', rect, inForm: !!fm, meta: meta || undefined, objs: [o] });
     });
+    for (const gr of groups.values()) {
+      // 글상자의 영역은 적어 둔 위치·폭을 쓴다 (글자 상자보다 정확)
+      const m = gr.meta, r = this.toDisp(pc, gr.b[0], gr.b[1], gr.b[2], gr.b[3]);
+      gr.rect = m.border || m.fill ? r : { x: Math.min(r.x, m.x), y: Math.min(r.y, m.y), w: Math.max(m.w, r.w), h: Math.max(r.h, r.y + r.h - m.y) };
+      delete (gr as any).b;
+    }
     return out;
   }
 
   /** 새 글자 넣기. x,y: 첫 줄 글자 상자의 왼쪽 위(화면 pt) */
-  async addText(docId: number, key: number, spec: { x: number; y: number; text: string; size: number; color: string; bold?: boolean; invisible?: boolean; widthFit?: number }): Promise<ObjChange> {
+  async addText(docId: number, key: number, spec: { x: number; y: number; text: string; size: number; color: string; bold?: boolean; invisible?: boolean; widthFit?: number; font?: string }): Promise<ObjChange> {
     const d = this.D(docId); const pc = this.pageByKey(d, key);
     const lines = spec.text.replace(/\r/g, '').split('\n');
-    const font = await this.loadSubsetFont(d, lines.join(''));
+    const font = await this.loadSubsetFont(d, lines.join(''), spec.font);
     const added: { h: number; idx: number }[] = [];
     const [R, G, B] = fromHex(spec.color);
     lines.forEach((line, i) => {
@@ -1018,15 +1101,201 @@ export class PdfEngine {
     this.P.FPDFPage_InsertObject(pc.page, path);
     return path;
   }
+  /* ───────────── Air PDF 표시(marked content): 도형·글상자·자유선을 저장 뒤에도 다시 고치기 위해 ───────────── */
+  private setObjMeta(d: DocCtx, o: number, spec: any) {
+    const mk = this.P.FPDFPageObj_AddMark(o, 'AirPDF');
+    // 한글이 PDF 문자열에서 깨지지 않게 ASCII로만 적는다
+    const json = JSON.stringify(spec).replace(/[\u0080-\uffff]/g, c => '\\u' + c.charCodeAt(0).toString(16).padStart(4, '0'));
+    if (mk) this.P.FPDFPageObjMark_SetStringParam(d.doc, o, mk, 'spec', json);
+  }
+  private metaOf(o: number): any | null {
+    const n = this.P.FPDFPageObj_CountMarks(o);
+    for (let i = 0; i < n; i++) {
+      const mk = this.P.FPDFPageObj_GetMark(o, i); if (!mk) continue;
+      const lp = this.malloc(4);
+      const nb = this.malloc(64);
+      this.P.FPDFPageObjMark_GetName(mk, nb, 64, lp);
+      const name = this.M.UTF16ToString(nb); this.free(nb);
+      if (name === 'AirPDF') {
+        this.P.FPDFPageObjMark_GetParamStringValue(mk, 'spec', 0, 0, lp);
+        const len = this.M.HEAP32[lp >> 2];
+        const vb = this.malloc(len + 2); this.P.FPDFPageObjMark_GetParamStringValue(mk, 'spec', vb, len, lp);
+        const v = this.M.UTF16ToString(vb); this.free(vb); this.free(lp);
+        try { return JSON.parse(v); } catch { return null; }
+      }
+      this.free(lp);
+    }
+    return null;
+  }
+  /** 화면 좌표 경로 → PDF 경로 객체. segs: M/L/C/Z */
+  private addSegPath(pc: PageCtx, segs: (string | number)[][], o: { stroke?: string; width?: number; fill?: string; opacity?: number }) {
+    let path = 0;
+    for (const sg of segs) {
+      const t = sg[0];
+      const pt = (i: number) => this.toPage(pc, sg[i] as number, sg[i + 1] as number);
+      if (t === 'M') { const p = pt(1); if (!path) path = this.P.FPDFPageObj_CreateNewPath(p[0], p[1]); else this.P.FPDFPath_MoveTo(path, p[0], p[1]); }
+      else if (t === 'L') { const p = pt(1); this.P.FPDFPath_LineTo(path, p[0], p[1]); }
+      else if (t === 'C') { const a = pt(1), b = pt(3), c = pt(5); this.P.FPDFPath_BezierTo(path, a[0], a[1], b[0], b[1], c[0], c[1]); }
+      else if (t === 'Z') this.P.FPDFPath_Close(path);
+    }
+    if (o.stroke) { const [R, G, B] = fromHex(o.stroke); this.P.FPDFPageObj_SetStrokeColor(path, R, G, B, Math.round((o.opacity ?? 1) * 255)); this.P.FPDFPageObj_SetStrokeWidth(path, o.width || 1); this.P.FPDFPageObj_SetLineCap(path, 1); this.P.FPDFPageObj_SetLineJoin(path, 1); }
+    if (o.fill) { const [R, G, B] = fromHex(o.fill); this.P.FPDFPageObj_SetFillColor(path, R, G, B, 255); }
+    this.P.FPDFPath_SetDrawMode(path, o.fill ? 1 : 0, !!o.stroke);
+    this.P.FPDFPage_InsertObject(pc.page, path);
+    return path;
+  }
+  private shapeSegs(kind: string, x: number, y: number, w: number, h: number, flip = false): (string | number)[][] {
+    if (kind === 'line') return flip ? [['M', x, y + h], ['L', x + w, y]] : [['M', x, y], ['L', x + w, y + h]];
+    if (kind === 'rect') return [['M', x, y], ['L', x + w, y], ['L', x + w, y + h], ['L', x, y + h], ['Z']];
+    const k = 0.5523, cx = x + w / 2, cy = y + h / 2, rx = w / 2, ry = h / 2;
+    return [['M', cx + rx, cy], ['C', cx + rx, cy + ry * k, cx + rx * k, cy + ry, cx, cy + ry], ['C', cx - rx * k, cy + ry, cx - rx, cy + ry * k, cx - rx, cy],
+      ['C', cx - rx, cy - ry * k, cx - rx * k, cy - ry, cx, cy - ry], ['C', cx + rx * k, cy - ry, cx + rx, cy - ry * k, cx + rx, cy], ['Z']];
+  }
   addShape(docId: number, key: number, spec: { kind: 'rect' | 'line' | 'ellipse'; x: number; y: number; w: number; h: number; stroke?: string; width?: number; fill?: string }): ObjChange {
     const d = this.D(docId); const pc = this.pageByKey(d, key);
-    let poly: [number, number][];
-    if (spec.kind === 'line') poly = [[spec.x, spec.y], [spec.x + spec.w, spec.y + spec.h]];
-    else if (spec.kind === 'rect') poly = [[spec.x, spec.y], [spec.x + spec.w, spec.y], [spec.x + spec.w, spec.y + spec.h], [spec.x, spec.y + spec.h]];
-    else { poly = []; const cx = spec.x + spec.w / 2, cy = spec.y + spec.h / 2; for (let i = 0; i < 72; i++) { const a = i / 72 * Math.PI * 2; poly.push([cx + Math.cos(a) * spec.w / 2, cy + Math.sin(a) * spec.h / 2]); } }
-    const path = this.addPath(pc, d, [poly], { stroke: spec.stroke, width: spec.width, fill: spec.fill, close: spec.kind !== 'line' });
+    const flip = spec.kind === 'line' && (spec.w < 0) !== (spec.h < 0);
+    const x = Math.min(spec.x, spec.x + spec.w), y = Math.min(spec.y, spec.y + spec.h), w = Math.abs(spec.w), h = Math.abs(spec.h);
+    const path = this.addSegPath(pc, this.shapeSegs(spec.kind, x, y, w, h, flip), spec);
+    this.setObjMeta(d, path, { t: 'shape', kind: spec.kind, stroke: spec.stroke || '', width: spec.width || 1, fill: spec.fill || '', flip });
     this.touch(pc);
     return { key, gen: this.gen(d, key), removed: [], added: [{ h: path, idx: this.P.FPDFPage_CountObjects(pc.page) - 1 }], substituted: false };
+  }
+  /** 자유선: 손으로 그린 점들을 부드러운 곡선(베지에)으로 */
+  addFree(docId: number, key: number, spec: { points: [number, number][]; stroke: string; width: number; opacity?: number }): ObjChange {
+    const d = this.D(docId); const pc = this.pageByKey(d, key);
+    const pts: [number, number][] = [];
+    for (const p of spec.points) { const l = pts[pts.length - 1]; if (!l || Math.hypot(p[0] - l[0], p[1] - l[1]) > 0.8) pts.push(p); }
+    if (pts.length === 1) pts.push([pts[0][0] + 0.1, pts[0][1]]);
+    const segs: (string | number)[][] = [['M', pts[0][0], pts[0][1]]];
+    for (let i = 0; i < pts.length - 1; i++) {
+      const p0 = pts[i - 1] || pts[i], p1 = pts[i], p2 = pts[i + 1], p3 = pts[i + 2] || p2;
+      segs.push(['C', p1[0] + (p2[0] - p0[0]) / 6, p1[1] + (p2[1] - p0[1]) / 6, p2[0] - (p3[0] - p1[0]) / 6, p2[1] - (p3[1] - p1[1]) / 6, p2[0], p2[1]]);
+    }
+    const path = this.addSegPath(pc, segs, { stroke: spec.stroke, width: spec.width, opacity: spec.opacity });
+    this.setObjMeta(d, path, { t: 'free', stroke: spec.stroke, width: spec.width, fill: '' });
+    this.touch(pc);
+    return { key, gen: this.gen(d, key), removed: [], added: [{ h: path, idx: this.P.FPDFPage_CountObjects(pc.page) - 1 }], substituted: false };
+  }
+  /** 도형 선 색·굵기·채우기 바꾸기 (되돌리기용 이전 값을 돌려준다) */
+  setShapeStyle(docId: number, key: number, objs: number[], st: { stroke?: string; width?: number; fill?: string }) {
+    const d = this.D(docId); const pc = this.pageByKey(d, key);
+    const before = objs.map(o => this.pathStyleOf(o));
+    for (const o of objs) {
+      const cur = this.pathStyleOf(o);
+      const stroke = st.stroke ?? cur.stroke, width = st.width ?? cur.width, fill = st.fill ?? cur.fill;
+      this.applyPathStyle(o, { stroke, width, fill });
+      const m = this.metaOf(o);
+      if (m) { this.removeMeta(o); this.setObjMeta(d, o, { ...m, stroke, width, fill }); }
+    }
+    this.touch(pc);
+    return before;
+  }
+  restoreShapeStyle(docId: number, key: number, states: { h: number; stroke: string; width: number; fill: string }[]) {
+    const d = this.D(docId); const pc = this.pageByKey(d, key);
+    for (const s of states) { this.applyPathStyle(s.h, s); const m = this.metaOf(s.h); if (m) { this.removeMeta(s.h); this.setObjMeta(d, s.h, { ...m, stroke: s.stroke, width: s.width, fill: s.fill }); } }
+    this.touch(pc); return true;
+  }
+  private removeMeta(o: number) {
+    const n = this.P.FPDFPageObj_CountMarks(o);
+    for (let i = n - 1; i >= 0; i--) { const mk = this.P.FPDFPageObj_GetMark(o, i); const nb = this.malloc(64), lp = this.malloc(4); this.P.FPDFPageObjMark_GetName(mk, nb, 64, lp); const name = this.M.UTF16ToString(nb); this.free(nb); this.free(lp); if (name === 'AirPDF') this.P.FPDFPageObj_RemoveMark(o, mk); }
+  }
+  private pathStyleOf(o: number) {
+    const p = this.malloc(36);
+    const m = this.P.FPDFPath_GetDrawMode(o, p, p + 4);
+    const fillMode = this.M.HEAP32[p >> 2], strokeOn = this.M.HEAP32[(p + 4) >> 2];
+    this.P.FPDFPageObj_GetStrokeColor(o, p + 8, p + 12, p + 16, p + 20);
+    const sc = this.u32(p + 8, 3);
+    this.P.FPDFPageObj_GetStrokeWidth(o, p + 24);
+    const width = this.f32(p + 24, 1)[0];
+    this.free(p);
+    const fc = this.objColor(o);
+    void m;
+    return { h: o, stroke: strokeOn ? toHex(sc[0], sc[1], sc[2]) : '', width, fill: fillMode ? toHex(fc[0], fc[1], fc[2]) : '' };
+  }
+  private applyPathStyle(o: number, st: { stroke: string; width: number; fill: string }) {
+    if (st.stroke) { const [R, G, B] = fromHex(st.stroke); this.P.FPDFPageObj_SetStrokeColor(o, R, G, B, 255); this.P.FPDFPageObj_SetStrokeWidth(o, st.width || 1); }
+    if (st.fill) { const [R, G, B] = fromHex(st.fill); this.P.FPDFPageObj_SetFillColor(o, R, G, B, 255); }
+    this.P.FPDFPath_SetDrawMode(o, st.fill ? 1 : 0, !!st.stroke);
+  }
+  /** 도형을 새 크기로 다시 그린다 (선 굵기가 찌그러지지 않게) */
+  reshape(docId: number, key: number, objs: number[], rect: Rect): ObjChange {
+    const d = this.D(docId); const pc = this.pageByKey(d, key);
+    const o = objs[0]; const m = this.metaOf(o);
+    if (!m || m.t !== 'shape') throw new Error('다시 그릴 수 없는 도형입니다');
+    const removed = [{ h: o, idx: this.objIndex(pc, o) }];
+    this.P.FPDFPage_RemoveObject(pc.page, o);
+    const path = this.addSegPath(pc, this.shapeSegs(m.kind, rect.x, rect.y, Math.max(1, rect.w), Math.max(1, rect.h), m.flip), m);
+    this.P.FPDFPage_RemoveObject(pc.page, path);
+    this.P.FPDFPage_InsertObjectAtIndex(pc.page, path, removed[0].idx);
+    this.setObjMeta(d, path, m);
+    this.touch(pc);
+    return { key, gen: this.gen(d, key), removed, added: [{ h: path, idx: removed[0].idx }], substituted: false };
+  }
+
+  /** 글상자: 테두리·배경(벡터) + 폭에 맞춰 줄 바꾼 진짜 글자. 모두 같은 묶음 번호로 표시해 나중에 통째로 고친다 */
+  async addTextBox(docId: number, key: number, spec: TextBoxSpec, at?: number): Promise<ObjChange & { rect: Rect }> {
+    const d = this.D(docId); const pc = this.pageByKey(d, key);
+    const g = spec.g || 'tb' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+    const font = spec.font || 'noto-sans';
+    let ttf: any = null; try { ttf = await this.fonts.outlines(font); } catch { /* CFF 글꼴은 대략 계산 */ }
+    const width = (t: string) => ttf ? ttf.width(t, spec.size) : [...t].reduce((s, c) => s + spec.size * (c.charCodeAt(0) > 0x2e80 ? 0.95 : 0.55), 0);
+    const inner = Math.max(spec.size, spec.w - spec.pad * 2);
+    const lines: string[] = [];
+    for (const para of spec.text.replace(/\r/g, '').split('\n')) {
+      let cur = '';
+      for (const tok of para.split(/(\s+)/)) {
+        if (!tok) continue;
+        if (width(cur + tok) <= inner || !cur) {
+          if (width(tok) > inner && !/^\s+$/.test(tok)) { for (const ch of tok) { if (cur && width(cur + ch) > inner) { lines.push(cur); cur = ''; } cur += ch; } }
+          else cur += tok;
+        } else { lines.push(cur.replace(/\s+$/, '')); cur = /^\s+$/.test(tok) ? '' : tok; }
+      }
+      lines.push(cur.replace(/\s+$/, ''));
+    }
+    const lh = spec.size * (spec.lh || 1.3);
+    const hgt = Math.max(spec.size * 1.4, lines.length * lh) + spec.pad * 2;
+    const rect = { x: spec.x, y: spec.y, w: spec.w, h: spec.minH ? Math.max(spec.minH, hgt) : hgt };
+    const meta = { ...spec, t: 'tb', g, text: spec.text };
+    const objs: number[] = [];
+    if (spec.border || spec.fill) {
+      const p = this.addSegPath(pc, this.shapeSegs('rect', rect.x, rect.y, rect.w, rect.h), { stroke: spec.border || undefined, width: spec.bw || 1, fill: spec.fill || undefined });
+      objs.push(p);
+    }
+    const allText = lines.join('');
+    if (allText.trim()) {
+      const f = await this.loadSubsetFont(d, allText, font);
+      const [R, G, B] = fromHex(spec.color);
+      const top = rect.y + spec.pad + (rect.h - spec.pad * 2 - lines.length * lh) * (spec.valign === 'middle' ? 0.5 : 0);
+      lines.forEach((ln, i) => {
+        if (!ln) return;
+        const o = this.P.FPDFPageObj_CreateTextObj(d.doc, f, spec.size);
+        const w = this.wstr(ln); this.P.FPDFText_SetText(o, w); this.free(w);
+        const tw = width(ln);
+        const x = spec.align === 'center' ? rect.x + (rect.w - tw) / 2 : spec.align === 'right' ? rect.x + rect.w - spec.pad - tw : rect.x + spec.pad;
+        const base = top + i * lh + (lh - spec.size) / 2 + spec.size * 0.86;
+        this.setMatrix(o, this.uprightMatrix(pc, x, base, 1));
+        this.P.FPDFPageObj_SetFillColor(o, R, G, B, 255);
+        if (spec.bold) this.fakeBold(o, [R, G, B, 255], spec.size);
+        this.P.FPDFPage_InsertObject(pc.page, o);
+        objs.push(o);
+      });
+    }
+    const added: { h: number; idx: number }[] = [];
+    for (const o of objs) {
+      this.setObjMeta(d, o, meta);
+      if (at !== undefined) { this.P.FPDFPage_RemoveObject(pc.page, o); this.P.FPDFPage_InsertObjectAtIndex(pc.page, o, Math.min(at + added.length, this.P.FPDFPage_CountObjects(pc.page))); added.push({ h: o, idx: at + added.length }); }
+      else added.push({ h: o, idx: this.objIndex(pc, o) });
+    }
+    this.touch(pc);
+    return { key, gen: this.gen(d, key), removed: [], added, substituted: true, rect };
+  }
+  /** 글상자 고치기: 이전 묶음을 떼어 두고 새로 만든다 */
+  async replaceTextBox(docId: number, key: number, objs: number[], spec: TextBoxSpec): Promise<ObjChange & { rect: Rect }> {
+    const d = this.D(docId); const pc = this.pageByKey(d, key);
+    const removed = objs.map(o => ({ h: o, idx: this.objIndex(pc, o) })).sort((a, b) => a.idx - b.idx);
+    for (const o of objs) this.P.FPDFPage_RemoveObject(pc.page, o);
+    const ch = await this.addTextBox(docId, key, spec, removed[0]?.idx);
+    return { ...ch, removed };
   }
 
   /** 표: 선(벡터) + 칸마다 진짜 글자 */
@@ -1044,7 +1313,7 @@ export class PdfEngine {
     push(this.addPath(pc, d, lines, { stroke: t.border, width: t.borderWidth }));
     const allText = t.cells.flat().join('');
     if (allText.trim()) {
-      const font = await this.loadSubsetFont(d, allText);
+      const font = await this.loadSubsetFont(d, allText, t.font);
       const [R, G, B] = fromHex(t.color);
       for (let r = 0; r < t.rows.length; r++) for (let c = 0; c < t.cols.length; c++) {
         const cell = (t.cells[r]?.[c] || '').split('\n');
@@ -1317,11 +1586,15 @@ export interface AnnotSpec {
 export interface TableSpec {
   x: number; y: number; cols: number[]; rows: number[]; cells: string[][];
   fontSize: number; color: string; border: string; borderWidth: number; padding: number;
-  headerFill?: string; headerBold?: boolean; align?: ('left' | 'center' | 'right')[];
+  headerFill?: string; headerBold?: boolean; align?: ('left' | 'center' | 'right')[]; font?: string;
 }
 export interface FieldInfo {
   id: number; page: number; type: 'text' | 'checkbox' | 'radio' | 'combo' | 'list'; name: string; value: string; rect: Rect;
   readOnly: boolean; required: boolean; multiline: boolean; password: boolean; multiSelect: boolean; editable: boolean;
   checked: boolean; exportValue: string; options: { label: string; selected: boolean }[]; fontSize: number;
+}
+export interface TextBoxSpec {
+  x: number; y: number; w: number; minH?: number; text: string; font?: string; size: number; color: string; bold?: boolean;
+  align?: 'left' | 'center' | 'right'; valign?: 'top' | 'middle'; border?: string; bw?: number; fill?: string; pad: number; lh?: number; g?: string;
 }
 export interface ObjChange { key: number; gen: number; removed: { h: number; idx: number }[]; added: { h: number; idx: number }[]; substituted: boolean; also?: number[] }

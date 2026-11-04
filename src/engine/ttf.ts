@@ -9,11 +9,13 @@ export class TTF {
   private locaLong = false; private nGlyphs = 0; private nHM = 0;
   private cmap12 = 0; private cmap4 = 0;
   private cache = new Map<number, Glyph>();
-  constructor(bytes: Uint8Array) {
+  constructor(bytes: Uint8Array, faceIndex = 0) {
     this.v = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-    const n = this.v.getUint16(4);
+    let base = 0;
+    if (this.v.getUint32(0) === 0x74746366) base = this.v.getUint32(12 + faceIndex * 4); // 'ttcf' 글꼴 모음
+    const n = this.v.getUint16(base + 4);
     for (let i = 0; i < n; i++) {
-      const o = 12 + i * 16;
+      const o = base + 12 + i * 16;
       const tag = String.fromCharCode(...[0, 1, 2, 3].map(k => this.v.getUint8(o + k)));
       this.tables.set(tag, this.v.getUint32(o + 8));
     }

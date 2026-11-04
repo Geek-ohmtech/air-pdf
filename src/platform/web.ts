@@ -1,6 +1,7 @@
 import { KINDS, type FileKind, type OpenedFile, type Platform, type SavedTarget } from './types.ts';
 
 const W: any = window;
+const webFonts = new Map<string, any>();
 const pdfTypes = [{ description: 'PDF 문서', accept: { 'application/pdf': ['.pdf'] } }];
 
 function inputPick(multiple: boolean, accept = 'application/pdf,.pdf'): Promise<File[]> {
@@ -33,6 +34,20 @@ export function createWeb(): Platform {
       } catch { return false; }
     },
     pickImages: () => inputPick(true, 'image/png,image/jpeg,image/webp,image/gif,image/bmp'),
+    async listFonts() {
+      // 크롬·엣지: 브라우저가 허락을 물어본다
+      if (!W.queryLocalFonts) return [];
+      const fonts: any[] = await W.queryLocalFonts();
+      const out: { family: string; path: string; index: number; korean: boolean }[] = [];
+      const seen = new Set<string>();
+      for (const f of fonts) {
+        if (!/regular|normal|medium|^$/i.test(f.style) || seen.has(f.family)) continue;
+        seen.add(f.family); webFonts.set(f.postscriptName, f);
+        out.push({ family: f.family, path: f.postscriptName, index: 0, korean: /[가-힣]/.test(f.family) || /gothic|myeongjo|batang|gulim|dotum|malgun|nanum|noto sans (kr|cjk)/i.test(f.family) });
+      }
+      return out;
+    },
+    async fontBytes(path: string) { const f = webFonts.get(path); if (!f) throw new Error('글꼴을 읽을 수 없습니다'); return new Uint8Array(await (await f.blob()).arrayBuffer()); },
     async saveAs(name, bytes, kind: FileKind = 'pdf'): Promise<SavedTarget | null> {
       const K = KINDS[kind];
       // claude.ai 아티팩트 안에서는 그쪽 저장 창을 쓴다
@@ -58,7 +73,7 @@ export function createWeb(): Platform {
       const us = new URL(location.href).searchParams.getAll('file');
       const out: OpenedFile[] = [];
       for (const u of us) { try { const r = await fetch(u); if (r.ok) out.push({ name: decodeURIComponent(u.split('/').pop() || '문서.pdf'), bytes: new Uint8Array(await r.arrayBuffer()) }); } catch { /* 건너뜀 */ } }
-      return out;
+      return { mode: null, files: out };
     },
     onExternalOpen() { /* 웹: 끌어다 놓기는 화면에서 처리 */ },
     async readPath(): Promise<OpenedFile> { throw new Error('웹에서는 경로로 열 수 없습니다'); },

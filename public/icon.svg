@@ -1,1 +1,16 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#4a7bf5"/><stop offset="1" stop-color="#2a4cc9"/></linearGradient></defs><rect width="64" height="64" rx="14" fill="url(#g)"/><path d="M17 9h21l10 10v36H17z" fill="#fff"/><path d="M38 9v10h10" fill="#cdd8fb"/><path d="M25.5 47.5C25 34.5 32 25.5 44 22.5c-.2 12-7.5 21.5-18.5 25z" fill="#2f54d6"/><path d="M22.5 51.5L41 27" stroke="#fff" stroke-width="1.7" stroke-linecap="round"/><path d="M30.5 37.5l-4-1.2M34 33l-3.6-1.6M33.6 39.8l3.8.4" stroke="#fff" stroke-width="1.2" stroke-linecap="round" opacity=".85"/></svg>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#2f6fdc"/><stop offset="1" stop-color="#173a8c"/></linearGradient>
+    <linearGradient id="fe" x1="0" y1="1" x2="1" y2="0"><stop offset="0" stop-color="#7cc4ff"/><stop offset="1" stop-color="#c9ecff"/></linearGradient>
+  </defs>
+  <rect x="32" y="32" width="960" height="960" rx="220" fill="url(#bg)"/>
+  <g fill="none" stroke="#fff" stroke-linecap="round" stroke-linejoin="round" stroke-width="78">
+    <path d="M232 726 L372 318 L512 726"/>
+    <path d="M612 488 V726"/>
+    <path d="M722 726 V488 M722 590 C736 520 790 484 852 492"/>
+  </g>
+  <circle cx="612" cy="368" r="46" fill="#fff"/>
+  <!-- A의 가로획 대신 깃털 -->
+  <path d="M168 684 C280 606 420 536 584 446 C520 586 380 690 168 684 Z" fill="url(#fe)"/>
+  <path d="M200 670 C330 604 450 540 566 462" fill="none" stroke="#2f6fdc" stroke-width="10" stroke-linecap="round" opacity=".55"/>
+</svg>

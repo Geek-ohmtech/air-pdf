@@ -8,43 +8,70 @@ import type { WrappedPdfiumModule } from '@embedpdf/pdfium';
 import { TTF } from './ttf.ts';
 
 export interface FontSource {
-  /** 전체 글꼴(TTF) 바이트, 비동기 */
+  /** 기본 글꼴(Noto Sans KR) 바이트, 비동기 */
   font(): Promise<Uint8Array>;
   /** 같은 글꼴, 동기(PDFium 콜백 안에서 필요). 워커에서는 동기 XHR로 받는다 */
   fontSync(): Uint8Array | null;
   hbWasm(): Promise<ArrayBuffer>;
+  /** 내장 글꼴 파일 받기 (vendor/fonts/…) */
+  fetchFont?(file: string): Promise<Uint8Array>;
 }
+
+/** 앱에 함께 들어 있는 글꼴 (모두 SIL Open Font License) */
+export const BUILTIN_FONTS: { id: string; name: string; file: string; css: string }[] = [
+  { id: 'noto-sans', name: '본고딕 (Noto Sans KR)', file: 'NotoSansKR-Regular.ttf', css: 'AirNotoSans' },
+  { id: 'nanum-gothic', name: '나눔고딕', file: 'NanumGothic-Regular.ttf', css: 'AirNanumGothic' },
+  { id: 'nanum-myeongjo', name: '나눔명조', file: 'NanumMyeongjo-Regular.ttf', css: 'AirNanumMyeongjo' },
+  { id: 'nanum-pen', name: '나눔손글씨 펜', file: 'NanumPenScript-Regular.ttf', css: 'AirNanumPen' },
+];
 
 const CJK_CHARSETS = new Set([128, 129, 130, 134, 136]);
 const KOREAN_FACE = /batang|gulim|dotum|gungsuh|malgun|myeongjo|gothic|hy|hanyang|hancom|hcr|함초롬|한컴|바탕|굴림|돋움|궁서|맑은|nanum|나눔|명조|고딕|ms-?mincho|ms-?gothic|simsun|simhei|mingliu|kozmin|kozgo|ryumin|stsong|msung|hysmyeongjo|hygothic|adobe ?myungjo|adobe ?gothic/i;
+
+interface FontEntry { bytes: Uint8Array | null; index: number; file?: string; ttf?: TTF }
 
 export class FontKit {
   private src: FontSource;
   private full: Uint8Array | null = null;
   private hb: any = null;
   private fallbackOn = false;
+  private fonts = new Map<string, FontEntry>();
 
-  constructor(src: FontSource) { this.src = src; }
+  constructor(src: FontSource) {
+    this.src = src;
+    for (const f of BUILTIN_FONTS) this.fonts.set(f.id, { bytes: null, index: 0, file: f.file });
+  }
+  /** 컴퓨터에 설치된 글꼴 등록 (TTC면 index로 얼굴 고르기) */
+  register(id: string, bytes: Uint8Array, index = 0) { this.fonts.set(id, { bytes, index }); }
+  has(id: string) { const f = this.fonts.get(id); return !!f && (!!f.bytes || !!f.file); }
 
-  private async ensure() {
-    if (!this.full) this.full = await this.src.font();
+  private async bytesOf(id: string): Promise<FontEntry> {
+    const f = this.fonts.get(id) || this.fonts.get('noto-sans')!;
+    if (!f.bytes) {
+      if (f.file === 'NotoSansKR-Regular.ttf' || !this.src.fetchFont) f.bytes = this.full || (this.full = await this.src.font());
+      else f.bytes = await this.src.fetchFont(f.file!);
+    }
+    return f;
+  }
+  private async ensureHb() {
     if (!this.hb) { const { instance } = await WebAssembly.instantiate(await this.src.hbWasm()); this.hb = instance.exports; }
   }
 
-  private ttf: TTF | null = null;
-  /** 윤곽선 해석기 (입력란 모양 그리기용) */
-  async outlines(): Promise<TTF> {
-    if (!this.ttf) { if (!this.full) this.full = await this.src.font(); this.ttf = new TTF(this.full); }
-    return this.ttf;
+  /** 윤곽선·글자 폭 해석기 */
+  async outlines(id = 'noto-sans'): Promise<TTF> {
+    const f = await this.bytesOf(id);
+    if (!f.ttf) f.ttf = new TTF(f.bytes!, f.index);
+    return f.ttf;
   }
 
-  async subset(text: string): Promise<Uint8Array> {
-    await this.ensure();
-    const hb = this.hb, font = this.full!;
+  async subset(text: string, id = 'noto-sans'): Promise<Uint8Array> {
+    await this.ensureHb();
+    const fe = await this.bytesOf(id);
+    const hb = this.hb, font = fe.bytes!;
     const heap = () => new Uint8Array(hb.memory.buffer);
     const fp = hb.malloc(font.length); heap().set(font, fp);
     const blob = hb.hb_blob_create(fp, font.length, 2, 0, 0);
-    const face = hb.hb_face_create(blob, 0); hb.hb_blob_destroy(blob);
+    const face = hb.hb_face_create(blob, fe.index); hb.hb_blob_destroy(blob);
     const input = hb.hb_subset_input_create_or_fail();
     const uset = hb.hb_subset_input_unicode_set(input);
     for (const ch of text) hb.hb_set_add(uset, ch.codePointAt(0)!);

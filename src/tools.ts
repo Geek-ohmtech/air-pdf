@@ -1,6 +1,7 @@
 /** 문서 도구: 이미지 → PDF, PDF → 이미지, 용량 줄이기 (보기·편집 모드 모두에서 메뉴로 쓴다) */
 import type { App } from './app.ts';
-import { busy, dialog, h, toast } from './ui/dom.ts';
+import type { OpenedFile } from './platform/types.ts';
+import { busy, dialog, h, icon, promptBox, toast } from './ui/dom.ts';
 import { makeZip } from './ui/zip.ts';
 
 export interface ImageSpec { bytes: Uint8Array; kind: 'jpg' | 'png'; w: number; h: number; name: string }
@@ -79,17 +80,78 @@ export async function insertImagePages(app: App, at: number, files: File[]) {
   return keys;
 }
 
-/** PDF 쪽 → PNG/JPG (여러 쪽이면 ZIP 하나로) */
+/** "1-3, 5, 8-" → 묶음 목록 (0부터). 끝을 비우면 마지막 쪽까지 */
+export function parseRanges(text: string, n: number): number[][] | null {
+  const out: number[][] = [];
+  for (const part of text.split(/[,;\s]+/).filter(Boolean)) {
+    const m = /^(\d*)(?:(-|~)(\d*))?$/.exec(part); if (!m || (!m[1] && !m[3])) return null;
+    const a = m[1] ? +m[1] : 1, z = m[2] ? (m[3] ? +m[3] : n) : a;
+    const g: number[] = [];
+    for (let i = Math.min(a, z); i <= Math.max(a, z); i++) if (i >= 1 && i <= n) g.push(i - 1);
+    if (g.length) out.push(g);
+  }
+  return out.length ? out : null;
+}
+const stem = (name: string) => name.replace(/\.[^.]+$/, '');
+const pad = (i: number, n: number) => String(i).padStart(String(n).length, '0');
+
+/** 파일 여러 개 저장: 데스크톱은 폴더를 골라 그 안에, 웹은 ZIP 하나로 */
+export async function saveMany(app: App, files: { name: string; data: Uint8Array }[], zipName: string, kind: 'pdf' | 'png' | 'jpg') {
+  if (!files.length) return;
+  if (files.length === 1) { const t = await app.platform.saveAs(files[0].name, files[0].data, kind); if (t) toast(`“${t.name}”로 저장했습니다.`); return; }
+  const P = app.platform;
+  if (P.pickFolder && P.writeInFolder) {
+    const dir = await P.pickFolder(); if (!dir) return;
+    const b = busy('저장하는 중…'); let last = '';
+    try { for (const [i, f] of files.entries()) { b.set(`저장하는 중… ${i + 1}/${files.length}`); last = await P.writeInFolder(dir, f.name, f.data); } }
+    catch (e: any) { toast('저장하지 못했습니다: ' + e.message); return; }
+    finally { b.done(); }
+    toast(`${files.length}개 파일을 폴더에 저장했습니다.`, 4000, P.reveal ? { label: '폴더 열기', run: () => P.reveal!(last) } : undefined);
+    return;
+  }
+  const t = await P.saveAs(zipName, makeZip(files), 'zip');
+  if (t) toast(`${files.length}개 파일을 “${t.name}”로 묶어 저장했습니다.`);
+}
+
+/** 엔진에 잠깐 여는 PDF (암호가 있으면 묻는다). 다 쓰면 close */
+async function openTemp(app: App, f: OpenedFile): Promise<number | null> {
+  let pw = '', tried = false;
+  for (;;) {
+    const r = await app.engine.call<{ docId?: number; error?: string }>('open', [f.bytes, pw]);
+    if (r.docId) return r.docId;
+    if (r.error !== 'password') { toast(`“${f.name}”은 PDF가 아니거나 손상된 파일이라 건너뜁니다.`); return null; }
+    const v = await promptBox('암호가 걸린 문서', `“${f.name}”의 암호를 입력하세요.`, '', { type: 'password', ok: '확인', error: tried ? '암호가 맞지 않습니다.' : undefined });
+    if (v === null) return null;
+    pw = v; tried = true;
+  }
+}
+
+async function renderImage(app: App, docId: number, i: number, dpi: number, fmt: string) {
+  const res: any = await app.engine.call('render', [docId, i, dpi / 72, undefined, true, false]);
+  const c = document.createElement('canvas'); c.width = res.width; c.height = res.height;
+  const g = c.getContext('2d')!;
+  if (fmt === 'jpg') { g.fillStyle = '#fff'; g.fillRect(0, 0, c.width, c.height); }
+  if (res.bitmap) { g.drawImage(res.bitmap, 0, 0); res.bitmap.close(); } else g.putImageData(new ImageData(res.data, res.width, res.height), 0, 0);
+  const blob: Blob = await new Promise(rr => c.toBlob(bb => rr(bb!), fmt === 'png' ? 'image/png' : 'image/jpeg', 0.9));
+  return new Uint8Array(await blob.arrayBuffer());
+}
+const fmtDpi = () => {
+  const fmt = h('select', { class: 'field' }, h('option', { value: 'png' }, 'PNG (글자가 선명)'), h('option', { value: 'jpg' }, 'JPG (용량이 작음)'));
+  const dpi = h('select', { class: 'field' }, h('option', { value: '96' }, '96 dpi (화면용)'), h('option', { value: '150', selected: '' }, '150 dpi (보통)'), h('option', { value: '300' }, '300 dpi (인쇄용)'));
+  return { fmt, dpi, nodes: [h('label', { class: 'lbl' }, '형식'), fmt, h('label', { class: 'lbl' }, '해상도'), dpi] };
+};
+const manyHint = (app: App) => app.platform.pickFolder ? '여러 파일은 고른 폴더에 저장합니다.' : '여러 파일은 ZIP 파일 하나로 묶습니다.';
+
+/** PDF 쪽 → PNG/JPG */
 export async function exportImages(app: App) {
   const d = app.doc; if (!d) return;
   const n = d.info.pageCount, cur = app.view.current;
-  const picked = app.mode === 'edit' ? app.sidebar.selected.size : 0;
+  const picked = app.sidebar.selected.size > 1 ? app.sidebar.selected.size : 0;
   const range = h('select', { class: 'field' }, h('option', { value: 'cur' }, `현재 쪽 (${cur + 1}쪽)`), h('option', { value: 'all' }, `모든 쪽 (${n}쪽)`), picked ? h('option', { value: 'picked' }, `고른 쪽 (${picked}쪽)`) : null, h('option', { value: 'custom' }, '쪽 번호 지정'));
   const custom = h('input', { class: 'field', placeholder: '예: 1-3, 5, 8', hidden: true });
   range.addEventListener('change', () => { custom.hidden = range.value !== 'custom'; if (!custom.hidden) custom.focus(); });
-  const fmt = h('select', { class: 'field' }, h('option', { value: 'png' }, 'PNG (글자가 선명)'), h('option', { value: 'jpg' }, 'JPG (용량이 작음)'));
-  const dpi = h('select', { class: 'field' }, h('option', { value: '96' }, '96 dpi (화면용)'), h('option', { value: '150', selected: '' }, '150 dpi (보통)'), h('option', { value: '300' }, '300 dpi (인쇄용)'));
-  const r = await dialog({ title: '이미지로 내보내기', body: h('div', { class: 'form' }, h('label', { class: 'lbl' }, '범위'), range, custom, h('label', { class: 'lbl' }, '형식'), fmt, h('label', { class: 'lbl' }, '해상도'), dpi, h('p', { class: 'hint' }, '여러 쪽은 ZIP 파일 하나로 묶습니다.')), buttons: [{ label: '취소', value: false }, { label: '내보내기', value: true, primary: true }], collect: () => ({ range: range.value, custom: custom.value, fmt: fmt.value, dpi: +dpi.value }) });
+  const fd = fmtDpi();
+  const r = await dialog({ title: '이미지로 내보내기', body: h('div', { class: 'form' }, h('label', { class: 'lbl' }, '범위'), range, custom, ...fd.nodes, h('p', { class: 'hint' }, manyHint(app))), buttons: [{ label: '취소', value: false }, { label: '내보내기', value: true, primary: true }], collect: () => ({ range: range.value, custom: custom.value, fmt: fd.fmt.value, dpi: +fd.dpi.value }) });
   if (!r?.value) return;
   const o = r.data;
   let pages: number[] = [];
@@ -97,32 +159,131 @@ export async function exportImages(app: App) {
   else if (o.range === 'all') pages = [...Array(n).keys()];
   else if (o.range === 'picked') pages = app.view.pages.map((p, i) => app.sidebar.selected.has(p.key) ? i : -1).filter(i => i >= 0);
   else {
-    for (const part of String(o.custom).split(/[,\s]+/).filter(Boolean)) {
-      const m = /^(\d+)(?:-(\d+))?$/.exec(part); if (!m) continue;
-      const a = +m[1], z = m[2] ? +m[2] : a;
-      for (let i = Math.min(a, z); i <= Math.max(a, z); i++) if (i >= 1 && i <= n) pages.push(i - 1);
-    }
-    pages = [...new Set(pages)];
-    if (!pages.length) { toast('쪽 번호를 알아볼 수 없습니다. 예: 1-3, 5'); return; }
+    const g = parseRanges(String(o.custom), n);
+    if (!g) { toast('쪽 번호를 알아볼 수 없습니다. 예: 1-3, 5'); return; }
+    pages = [...new Set(g.flat())];
   }
   const b = busy('그림으로 바꾸는 중…');
   const files: { name: string; data: Uint8Array }[] = [];
-  const base = d.name.replace(/\.pdf$/i, '');
+  const base = stem(d.name);
   try {
     for (const i of pages) {
       b.set(`그림으로 바꾸는 중… ${files.length + 1}/${pages.length}`);
-      const res: any = await app.engine.call('render', [d.id, i, o.dpi / 72, undefined, true, false]);
-      const c = document.createElement('canvas'); c.width = res.width; c.height = res.height;
-      const g = c.getContext('2d')!;
-      if (res.bitmap) { g.drawImage(res.bitmap, 0, 0); res.bitmap.close(); } else g.putImageData(new ImageData(res.data, res.width, res.height), 0, 0);
-      const blob: Blob = await new Promise(rr => c.toBlob(bb => rr(bb!), o.fmt === 'png' ? 'image/png' : 'image/jpeg', 0.9));
-      files.push({ name: `${base}_${String(i + 1).padStart(String(n).length, '0')}쪽.${o.fmt}`, data: new Uint8Array(await blob.arrayBuffer()) });
+      files.push({ name: `${base}_${pad(i + 1, n)}쪽.${o.fmt}`, data: await renderImage(app, d.id, i, o.dpi, o.fmt) });
     }
-  } catch (e: any) { b.done(); toast('내보내지 못했습니다: ' + e.message); return; }
-  b.done();
-  const one = files.length === 1;
-  const t = await app.platform.saveAs(one ? files[0].name : `${base}_그림${files.length}장.zip`, one ? files[0].data : makeZip(files), one ? o.fmt : 'zip');
-  if (t) toast(one ? `“${t.name}”로 저장했습니다.` : `${files.length}장을 “${t.name}”로 묶어 저장했습니다.`);
+  } catch (e: any) { toast('내보내지 못했습니다: ' + e.message); return; }
+  finally { b.done(); }
+  await saveMany(app, files, `${base}_그림${files.length}장.zip`, o.fmt);
+}
+
+/** 탐색기 메뉴: PDF 여러 개의 모든 쪽을 그림으로 */
+export async function pdfsToImages(app: App, src: OpenedFile[]) {
+  const fd = fmtDpi();
+  const r = await dialog({ title: `PDF ${src.length}개 → 이미지`, body: h('div', { class: 'form' }, h('p', {}, src.map(f => f.name).join(', ')), ...fd.nodes, h('p', { class: 'hint' }, '모든 쪽을 한 쪽에 한 장씩 그림으로 만듭니다. ' + manyHint(app))), buttons: [{ label: '취소', value: false }, { label: '만들기', value: true, primary: true }], collect: () => ({ fmt: fd.fmt.value, dpi: +fd.dpi.value }) });
+  if (!r?.value) return;
+  const files: { name: string; data: Uint8Array }[] = [];
+  for (const f of src) {
+    const id = await openTemp(app, f); if (!id) continue;
+    const b = busy('그림으로 바꾸는 중…');
+    try {
+      const n = (await app.engine.call<any>('info', [id])).pageCount;
+      for (let i = 0; i < n; i++) { b.set(`“${f.name}” ${i + 1}/${n}쪽`); files.push({ name: `${stem(f.name)}_${pad(i + 1, n)}쪽.${r.data.fmt}`, data: await renderImage(app, id, i, r.data.dpi, r.data.fmt) }); }
+    } catch (e: any) { toast(`“${f.name}”을 바꾸지 못했습니다: ` + e.message); }
+    finally { b.done(); app.engine.call('close', [id]); }
+  }
+  await saveMany(app, files, `그림${files.length}장.zip`, r.data.fmt);
+}
+
+/** PDF 나누기: 지금 문서(src 없음) 또는 탐색기에서 고른 파일들 */
+export async function splitPdf(app: App, src?: OpenedFile[]) {
+  const d = app.doc;
+  if (!src && !d) return;
+  const picked = !src && app.sidebar.selected.size > 0 ? app.sidebar.selected.size : 0;
+  const how = h('select', { class: 'field' },
+    h('option', { value: 'each' }, '한 쪽씩 — 쪽마다 파일 하나'),
+    h('option', { value: 'every' }, '정한 쪽 수마다'),
+    h('option', { value: 'ranges' }, '쪽 번호로 나누기'),
+    picked ? h('option', { value: 'picked' }, `고른 쪽만 빼내기 (${picked}쪽)`) : null);
+  const every = h('input', { class: 'field', type: 'number', min: '1', value: '2', hidden: true });
+  const ranges = h('input', { class: 'field', placeholder: '예: 1-3, 4-10, 11-  (쉼표마다 파일 하나)', hidden: true });
+  const sync = () => { every.hidden = how.value !== 'every'; ranges.hidden = how.value !== 'ranges'; };
+  how.addEventListener('change', () => { sync(); (every.hidden ? ranges : every).focus(); });
+  const what = src ? `${src.length === 1 ? '“' + src[0].name + '”' : `PDF ${src.length}개`}` : `“${d!.name}” (${d!.info.pageCount}쪽)`;
+  const r = await dialog({ title: 'PDF 나누기', body: h('div', { class: 'form' }, h('p', {}, what), h('label', { class: 'lbl' }, '나누는 방법'), how, every, ranges, h('p', { class: 'hint' }, '원본은 그대로 두고 나눈 파일을 새로 만듭니다. ' + manyHint(app))), buttons: [{ label: '취소', value: false }, { label: '나누기', value: true, primary: true }], collect: () => ({ how: how.value, every: Math.max(1, parseInt(every.value) || 1), ranges: ranges.value }) });
+  if (!r?.value) return;
+  const o = r.data;
+  const groupsFor = (n: number, keys?: number[]): number[][] | null => {
+    if (o.how === 'each') return [...Array(n).keys()].map(i => [i]);
+    if (o.how === 'every') { const g: number[][] = []; for (let i = 0; i < n; i += o.every) g.push([...Array(Math.min(o.every, n - i)).keys()].map(k => i + k)); return g; }
+    if (o.how === 'picked') return [app.view.pages.map((p, i) => keys!.includes(p.key) ? i : -1).filter(i => i >= 0)];
+    return parseRanges(o.ranges, n);
+  };
+  const out: { name: string; data: Uint8Array }[] = [];
+  const cut = async (id: number, name: string, n: number, keys?: number[]) => {
+    const groups = groupsFor(n, keys);
+    if (!groups) { toast('쪽 번호를 알아볼 수 없습니다. 예: 1-3, 4-10, 11-'); return false; }
+    const b = busy('나누는 중…');
+    try {
+      for (const [gi, g] of groups.entries()) {
+        b.set(`나누는 중… ${gi + 1}/${groups.length}`);
+        const label = g.length === 1 ? `${pad(g[0] + 1, n)}쪽` : o.how === 'picked' ? '고른 쪽' : `${pad(g[0] + 1, n)}-${pad(g[g.length - 1] + 1, n)}쪽`;
+        out.push({ name: `${stem(name)}_${label}.pdf`, data: await app.engine.call<Uint8Array>('extract', [id, g]) });
+      }
+    } finally { b.done(); }
+    return true;
+  };
+  if (!src) { if (!await cut(d!.id, d!.name, d!.info.pageCount, [...app.sidebar.selected])) return; }
+  else for (const f of src) {
+    const id = await openTemp(app, f); if (!id) continue;
+    try { if (!await cut(id, f.name, (await app.engine.call<any>('info', [id])).pageCount)) return; }
+    finally { app.engine.call('close', [id]); }
+  }
+  if (out.length === 1 && !src) { // 한 파일이면 바로 새 탭으로 보여 준다
+    await app.openFiles([{ name: out[0].name, bytes: out[0].data }], true);
+    toast('빼낸 쪽을 새 탭으로 열었습니다. Ctrl+S로 저장하세요.'); return;
+  }
+  await saveMany(app, out, `${src?.length === 1 ? stem(src[0].name) : d && !src ? stem(d.name) : 'PDF'}_나눔${out.length}개.zip`, 'pdf');
+}
+
+/** PDF 여러 개 합치기 → 새 탭. 순서를 바꿀 수 있다 */
+export async function mergeFiles(app: App, src?: OpenedFile[]) {
+  if (!src) src = await app.platform.pickPdfs(true);
+  if (!src.length) return;
+  if (src.length < 2) { toast('합치려면 PDF를 두 개 이상 고르세요.'); return; }
+  const list = [...src];
+  const ul = h('ol', { class: 'merge-list' });
+  const draw = () => {
+    ul.innerHTML = '';
+    list.forEach((f, i) => ul.append(h('li', {}, h('span', { class: 'merge-name', title: f.path || f.name }, f.name),
+      h('button', { class: 'tb sm', type: 'button', title: '위로', disabled: i === 0 ? '' : undefined, onclick: () => { [list[i - 1], list[i]] = [list[i], list[i - 1]]; draw(); } }, '↑'),
+      h('button', { class: 'tb sm', type: 'button', title: '아래로', disabled: i === list.length - 1 ? '' : undefined, onclick: () => { [list[i + 1], list[i]] = [list[i], list[i + 1]]; draw(); } }, '↓'),
+      h('button', { class: 'tb sm', type: 'button', title: '빼기', onclick: () => { list.splice(i, 1); draw(); } }, icon('close')))));
+  };
+  draw();
+  const sortBtn = h('button', { class: 'btn sm', type: 'button', onclick: () => { list.sort((a, b) => a.name.localeCompare(b.name, 'ko', { numeric: true })); draw(); } }, '이름순 정렬');
+  const r = await dialog({ title: 'PDF 합치기', body: h('div', { class: 'form' }, h('p', { class: 'hint' }, '이 순서대로 이어 붙입니다.'), ul, sortBtn), buttons: [{ label: '취소', value: false }, { label: '합치기', value: true, primary: true }] });
+  if (!r?.value || list.length < 1) return;
+  const docId = await app.engine.call<number>('createDoc');
+  const b = busy('합치는 중…');
+  let at = 0, used = 0;
+  try {
+    for (const [i, f] of list.entries()) {
+      b.set(`합치는 중… ${i + 1}/${list.length}`);
+      let pw = '', res: { keys?: number[]; error?: string };
+      for (;;) {
+        res = await app.engine.call('importPdf', [docId, f.bytes, pw, at]);
+        if (res.error !== 'password') break;
+        b.done();
+        const v = await promptBox('암호가 걸린 문서', `“${f.name}”의 암호를 입력하세요.`, '', { type: 'password', ok: '확인', error: pw ? '암호가 맞지 않습니다.' : undefined });
+        b.set('합치는 중…');
+        if (v === null) break; pw = v;
+      }
+      if (res.keys) { at += res.keys.length; used++; } else if (res.error !== 'password') toast(`“${f.name}”은 읽을 수 없어 건너뛰었습니다.`);
+    }
+  } finally { b.done(); }
+  if (!at) { app.engine.call('close', [docId]); return; }
+  await app.addTab(docId, `${stem(list[0].name)} 외 ${used - 1}개 합침.pdf`, true);
+  toast(`${used}개 문서, ${at}쪽을 합쳤습니다. Ctrl+S로 저장하세요.`);
 }
 
 /** 용량 줄이기: 사본을 만들어 큰 그림만 낮은 해상도로. 원본은 그대로 둔다 */

@@ -49,6 +49,9 @@ export const icons = {
   trash: P('<path d="M3.5 5.5h13M8 5.5V3.5h4v2M5.5 5.5l.8 11h7.4l.8-11"/>'),
   pageAdd: P('<path d="M4.5 2.5h7l4 4v11h-11z"/><path d="M10 8.5v6M7 11.5h6"/>'),
   merge: P('<rect x="2.5" y="2.5" width="8" height="10" rx="1"/><path d="M8.5 17.5h8.5v-11"/><path d="M14 2v5M11.5 4.5h5"/>'),
+  split: P('<path d="M4.5 2.5h11v6h-11zM4.5 11.5h11v6h-11z"/><path d="M2 10h2.5M15.5 10H18" stroke-dasharray="1.5 1.5"/>'),
+  pin: P('<path d="M10 2.5l2 5h5l-4 3.2 1.6 5.3L10 13l-4.6 3 1.6-5.3-4-3.2h5z"/>'),
+  update: P('<path d="M16.5 10a6.5 6.5 0 1 1-2-4.7"/><path d="M15 2.5v3.5h-3.5"/>'),
   extract: P('<path d="M4.5 2.5h7l4 4v11h-11z"/><path d="M10 14.5v-6M7.5 11L10 8.5l2.5 2.5"/>'),
   up: P('<path d="M5 12.5L10 7.5l5 5"/>'),
   down: P('<path d="M5 7.5L10 12.5l5-5"/>'),
@@ -68,24 +71,63 @@ export const icons = {
   check: P('<path d="M4 10.5l4 4 8-9"/>'),
   view: P('<path d="M1.5 10S4.5 4.5 10 4.5 18.5 10 18.5 10 15.5 15.5 10 15.5 1.5 10 1.5 10z"/><circle cx="10" cy="10" r="2.5"/>'),
   edit: P('<path d="M13.5 3.5l3 3-9 9-4 1 1-4z"/>'),
+  textbox: P('<rect x="2.5" y="4" width="15" height="12" rx="1.2"/><path d="M5.5 7.5h9M5.5 10h9M5.5 12.5h5.5"/>'),
+  free: P('<path d="M3 14c2-6 4.5-8 6-6s0 5 2 6 4-3 6-7"/>'),
   compress: P('<path d="M10 2.5v5M7.5 5L10 7.5 12.5 5M10 17.5v-5M7.5 15l2.5-2.5 2.5 2.5"/><path d="M3 10h14"/>'),
   fit: P('<path d="M3 7V3h4M13 3h4v4M17 13v4h-4M7 17H3v-4"/><rect x="7" y="7" width="6" height="6" rx=".5"/>'),
 };
 export type IconName = keyof typeof icons;
 export function icon(name: IconName) { const s = document.createElement('span'); s.className = 'ico'; s.innerHTML = icons[name]; return s; }
 
+/**
+ * 가로로 넘치는 도구줄: 스크롤바는 숨기고 좌우 끝에 이동 단추를 띄운다(필요할 때만).
+ * 휠·끌기·터치 스크롤은 그대로 된다.
+ */
+export function hscroll(wrap: HTMLElement, inner: HTMLElement) {
+  wrap.classList.add('hs-wrap'); inner.classList.add('hs-inner');
+  const mk = (dir: number) => {
+    const b = h('button', { class: 'hs-btn ' + (dir < 0 ? 'l' : 'r'), type: 'button', tabindex: '-1', 'aria-label': dir < 0 ? '왼쪽 도구 보기' : '오른쪽 도구 보기', title: dir < 0 ? '왼쪽 도구' : '오른쪽 도구', hidden: true }, icon(dir < 0 ? 'prev' : 'next'));
+    let hold = 0;
+    const step = () => inner.scrollBy({ left: dir * Math.max(140, inner.clientWidth * 0.6), behavior: 'smooth' });
+    b.addEventListener('click', step);
+    b.addEventListener('pointerdown', () => { clearInterval(hold); hold = window.setTimeout(() => { hold = window.setInterval(() => { inner.scrollLeft += dir * 12; }, 16); }, 350); });
+    const stop = () => { clearTimeout(hold); clearInterval(hold); };
+    b.addEventListener('pointerup', stop); b.addEventListener('pointerleave', stop);
+    return b;
+  };
+  const L = mk(-1), R = mk(1);
+  wrap.append(L, R);
+  const upd = () => {
+    const max = inner.scrollWidth - inner.clientWidth;
+    L.hidden = max <= 2 || inner.scrollLeft <= 2;
+    R.hidden = max <= 2 || inner.scrollLeft >= max - 2;
+  };
+  inner.addEventListener('scroll', upd, { passive: true });
+  new ResizeObserver(upd).observe(inner);
+  new MutationObserver(() => requestAnimationFrame(upd)).observe(inner, { childList: true, subtree: true, attributes: true, attributeFilter: ['hidden', 'class'] });
+  inner.addEventListener('wheel', e => {
+    if (e.ctrlKey || inner.scrollWidth <= inner.clientWidth + 2 || Math.abs(e.deltaX) > Math.abs(e.deltaY)) return;
+    inner.scrollLeft += e.deltaY; e.preventDefault();
+  }, { passive: false });
+  // 포커스가 가려진 단추로 가면 보이게
+  inner.addEventListener('focusin', e => (e.target as HTMLElement).scrollIntoView?.({ inline: 'nearest', block: 'nearest' }));
+  requestAnimationFrame(upd);
+  return upd;
+}
+
 let toastT = 0;
-export function toast(msg: string, ms = 2800) {
+export function toast(msg: string, ms = 2800, action?: { label: string; run: () => void }) {
   let t = document.getElementById('toast');
   if (!t) { t = h('div', { id: 'toast', class: 'toast', role: 'status', 'aria-live': 'polite' }); document.body.append(t); }
   t.textContent = msg; t.classList.add('show');
+  if (action) { t.append(h('button', { class: 'toast-act', type: 'button', onclick: () => { t!.classList.remove('show'); action.run(); } }, action.label)); ms = Math.max(ms, 6000); }
   clearTimeout(toastT); toastT = window.setTimeout(() => t!.classList.remove('show'), ms);
 }
 
 export function busy(msg: string) {
   const el = h('div', { class: 'busy' }, h('div', { class: 'busy-card' }, h('span', { class: 'spin' }), h('span', { class: 'busy-msg' }, msg)));
   document.body.append(el);
-  return { set: (m: string) => { (el.querySelector('.busy-msg') as HTMLElement).textContent = m; }, done: () => el.remove() };
+  return { set: (m: string) => { if (!el.isConnected) document.body.append(el); (el.querySelector('.busy-msg') as HTMLElement).textContent = m; }, done: () => el.remove() };
 }
 
 /** 모달 대화상자. 버튼을 누르면 값과 함께 닫힌다 */

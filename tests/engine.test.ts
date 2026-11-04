@@ -7,9 +7,11 @@ import { FontKit } from '../src/engine/fonts.ts';
 const NM = new URL('../node_modules/', import.meta.url).pathname;
 const fontPath = NM + '@expo-google-fonts/noto-sans-kr/400Regular/NotoSansKR_400Regular.ttf';
 const P = await init({ wasmBinary: fs.readFileSync(NM + '@embedpdf/pdfium/dist/pdfium.wasm') });
+const FONTFILES: Record<string, string> = { 'NanumGothic-Regular.ttf': 'nanum-gothic/400Regular/NanumGothic_400Regular.ttf', 'NanumMyeongjo-Regular.ttf': 'nanum-myeongjo/400Regular/NanumMyeongjo_400Regular.ttf', 'NanumPenScript-Regular.ttf': 'nanum-pen-script/400Regular/NanumPenScript_400Regular.ttf' };
 const kit = new FontKit({
   font: async () => fs.readFileSync(fontPath), fontSync: () => fs.readFileSync(fontPath),
   hbWasm: async () => fs.readFileSync(NM + 'harfbuzzjs/dist/harfbuzz-subset.wasm').buffer,
+  fetchFont: async (f: string) => new Uint8Array(fs.readFileSync(NM + '@expo-google-fonts/' + FONTFILES[f])),
 });
 const E = new PdfEngine(P, kit);
 const M: any = P.pdfium;
@@ -320,6 +322,63 @@ await t('이미지 → PDF, 용량 줄이기', async () => {
   const id2 = E.open(res.bytes).docId!;
   ok(E.info(id2).pageCount === 2 && darkBox(E.render(id2, 0, 0.5)).n > 500, '줄인 사본이 정상');
   ok(E.save(id).length > photo.length, '원본 문서는 그대로');
+});
+
+await t('글자만 지우기 / 글자 색·굵게 바꾸기', async () => {
+  const id = E.createDoc();
+  E.addImagePage(id, 0, { bytes: new Uint8Array(fs.readFileSync(new URL('./fixtures/logo.png', import.meta.url).pathname)), kind: 'png', w: 400, h: 200 }, 'a4');
+  const key = E.keys(id)[0];
+  await E.addText(id, key, { x: 100, y: 330, text: '로고 위의 글자', size: 20, color: '#111111' });
+  E.addShape(id, key, { kind: 'rect', x: 90, y: 320, w: 200, h: 40, stroke: '#ff0000', width: 2 });
+  const objsBefore = E.pageObjects(id, key).length;
+  ok(E.textData(id, 0).text.includes('로고 위의 글자'), '지우기 전');
+  E.redactText(id, key, { x: 80, y: 310, w: 260, h: 60 });
+  ok(!E.textData(id, 0).text.includes('로고'), '글자는 실제로 사라짐');
+  const after = E.pageObjects(id, key);
+  ok(after.length === objsBefore, `그림·도형은 그대로 (${objsBefore}개 → ${after.length}개: ${after.map(o => o.type).join(',')})`);
+  // 색·굵게
+  await E.addText(id, key, { x: 100, y: 600, text: '색을 바꿀 글자', size: 16, color: '#000000' });
+  const run = E.textRuns(id, key).find(r => r.text.includes('색을 바꿀'))!;
+  const st = E.setTextStyle(id, key, run.objs, { color: '#d0342c', bold: true });
+  const run2 = E.textRuns(id, key).find(r => r.text.includes('색을 바꿀'))!;
+  ok(run2.color === '#d0342c', '색 바뀜 ' + run2.color);
+  E.restoreTextStyle(id, key, st.before);
+  ok(E.textRuns(id, key).find(r => r.text.includes('색을 바꿀'))!.color === '#000000', '색 되돌리기');
+});
+
+await t('글꼴 선택, 글상자, 자유선, 도형 다시 고치기', async () => {
+  const id = E.createDoc();
+  const key = E.insertBlank(id, 0, 595, 842);
+  await E.addText(id, key, { x: 60, y: 60, text: '나눔손글씨로 쓴 글', size: 20, color: '#223344', font: 'nanum-pen' });
+  const run = E.textRuns(id, key).find(r => r.text.includes('나눔손글씨'))!;
+  ok(/NanumPen/i.test(run.font), '고른 글꼴로 들어감: ' + run.font);
+  const ch = await E.editRun(id, key, run.objs, '명조로 바꾼 글', { font: 'nanum-myeongjo' });
+  ok(/Myeongjo/i.test(E.textRuns(id, key).find(r => r.text.includes('명조로'))!.font), '고친 뒤 글꼴 바꾸기');
+  const tb = await E.addTextBox(id, key, { x: 60, y: 120, w: 200, text: '글상자 안의 긴 문장은 폭에 맞춰 자동으로 줄이 바뀝니다. 두 번째 문장도 있습니다.', size: 12, color: '#111111', border: '#2b59c3', bw: 1, fill: '#eef3ff', pad: 6 });
+  ok(tb.rect.h > 50 && tb.added.length >= 4, `글상자 ${tb.added.length}개 객체, 높이 ${tb.rect.h.toFixed(0)}pt (여러 줄)`);
+  E.addShape(id, key, { kind: 'ellipse', x: 300, y: 120, w: 120, h: 60, stroke: '#d0342c', width: 2 });
+  E.addFree(id, key, { points: [[300, 300], [320, 280], [350, 310], [380, 290], [400, 320]], stroke: '#1f8a4c', width: 3 });
+  const out = E.save(id);
+  const id2 = E.open(out).docId!; const k2 = E.keys(id2)[0];
+  const objs = E.pageObjects(id2, k2);
+  const box = objs.find(o => o.type === 'textbox'), sh = objs.find(o => o.type === 'shape'), fr = objs.find(o => o.type === 'free');
+  ok(box && box.meta.text.startsWith('글상자 안의') && box.objs!.length === tb.added.length, '저장 후에도 글상자로 알아봄 (한글 내용 유지)');
+  ok(sh && sh.meta.kind === 'ellipse' && sh.meta.stroke === '#d0342c', '저장 후에도 도형 정보 유지');
+  ok(!!fr, '자유선');
+  ok(!E.textRuns(id2, k2).some(r => r.text.startsWith('글상자')), '글상자 글자는 줄 고치기 목록에서 빠짐');
+  const before = E.setShapeStyle(id2, k2, sh!.objs!, { stroke: '#2b59c3', width: 4, fill: '#ffeecc' });
+  const sh2 = E.pageObjects(id2, k2).find(o => o.type === 'shape')!;
+  ok(sh2.meta.fill === '#ffeecc' && sh2.meta.width === 4, '도형 색·굵기·채우기 바꾸기');
+  E.restoreShapeStyle(id2, k2, before);
+  const rs = E.reshape(id2, k2, sh2.objs!, { x: 300, y: 120, w: 200, h: 40 });
+  const sh3 = E.pageObjects(id2, k2).find(o => o.type === 'shape')!;
+  ok(Math.abs(sh3.rect.w - 202) < 4 && Math.abs(sh3.rect.h - 42) < 4, `도형 크기 다시 그리기 ${sh3.rect.w.toFixed(0)}×${sh3.rect.h.toFixed(0)}`);
+  const rb = await E.replaceTextBox(id2, k2, box!.objs!, { ...box!.meta, text: '바꾼 글상자', fill: '', border: '#000000' });
+  ok(rb.removed.length === box!.objs!.length && E.textData(id2, 0).text.includes('바꾼 글상자'), '글상자 고치기');
+  const img = E.pageObjects(id2, k2).find(o => o.type === 'free')!;
+  E.transformObjs(id2, k2, E.pageGen(id2, k2), img.objs!, 0, 0, [2, 0.5], { x: img.rect.x, y: img.rect.y });
+  const img2 = E.pageObjects(id2, k2).find(o => o.type === 'free')!;
+  ok(Math.abs(img2.rect.w / img.rect.w - 2) < 0.15 && Math.abs(img2.rect.h / img.rect.h - 0.5) < 0.2, '가로·세로 따로 늘이기');
 });
 
 console.log(fails ? `\n실패 ${fails}건` : '\n모두 통과');

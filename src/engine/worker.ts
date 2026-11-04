@@ -26,6 +26,7 @@ async function boot(b: string) {
       return fontBytes;
     },
     hbWasm: async () => (await fetch(vendor('harfbuzz-subset.wasm'))).arrayBuffer(),
+    fetchFont: async (file: string) => { const r = await fetch(vendor('fonts/' + file)); if (!r.ok) throw new Error('글꼴 파일을 찾지 못했습니다: ' + file); return new Uint8Array(await r.arrayBuffer()); },
   });
   engine = new PdfEngine(P, kit);
 }

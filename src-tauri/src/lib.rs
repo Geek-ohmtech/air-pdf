@@ -1,28 +1,35 @@
 //! Air PDF 데스크톱 셸.
-//! PDF 처리는 모두 웹 화면 안의 PDFium(WebAssembly)이 하고, 여기서는 파일 읽기/쓰기와
-//! "연결 프로그램으로 열기"로 넘어온 파일 경로만 다룬다.
+//! PDF 처리는 모두 웹 화면 안의 PDFium(WebAssembly)이 하고, 여기서는 파일 읽기/쓰기,
+//! "연결 프로그램으로 열기"·탐색기 오른쪽 단추 메뉴로 넘어온 파일 경로, 글꼴 목록, 기본 프로그램 지정만 다룬다.
+use serde::Serialize;
 use std::sync::Mutex;
 use tauri::{ipc::Request, ipc::Response, Emitter, Manager, State};
 
-#[derive(Default)]
-struct Pending(Mutex<Vec<String>>);
+/// 탐색기에서 넘어온 일: mode 없음 = 열기, 있으면 merge / split / to-images / to-pdf
+#[derive(Clone, Serialize, Default)]
+struct Batch {
+    mode: Option<String>,
+    files: Vec<String>,
+}
 
-/// 명령줄로 받은 PDF 경로 (탐색기에서 더블클릭, "연결 프로그램", 끌어다 놓기로 실행)
+#[derive(Default)]
+struct Pending(Mutex<Batch>);
+
+/// 처음 실행될 때 받은 파일 (다음부터는 "open-files" 이벤트로 온다)
 #[tauri::command]
-fn initial_files(pending: State<Pending>) -> Vec<String> {
+fn initial_files(pending: State<Pending>) -> Batch {
     std::mem::take(&mut *pending.0.lock().unwrap())
 }
 
 /// 파일을 그대로 바이트로 돌려준다 (JSON으로 바꾸지 않아 큰 PDF도 빠르다)
 #[tauri::command]
 async fn read_file(path: String) -> Result<Response, String> {
-    let bytes = tokio_read(&path).await.map_err(|e| format!("{path}: {e}"))?;
+    let p = path.clone();
+    let bytes = tauri::async_runtime::spawn_blocking(move || std::fs::read(p))
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| format!("{path}: {e}"))?;
     Ok(Response::new(bytes))
-}
-
-async fn tokio_read(path: &str) -> std::io::Result<Vec<u8>> {
-    let p = path.to_owned();
-    tauri::async_runtime::spawn_blocking(move || std::fs::read(p)).await.map_err(std::io::Error::other)?
 }
 
 /// 본문은 저장할 바이트, 경로는 x-path 머리글. 임시 파일에 쓴 뒤 바꿔치기해서 도중에 실패해도 원본이 깨지지 않는다.
@@ -40,7 +47,14 @@ async fn write_file(request: Request<'_>) -> Result<(), String> {
     let data = data.clone();
     tauri::async_runtime::spawn_blocking(move || -> std::io::Result<()> {
         let target = std::path::PathBuf::from(&path);
-        let tmp = target.with_extension("pdf.airpdf-tmp");
+        if let Some(dir) = target.parent() {
+            if !dir.as_os_str().is_empty() {
+                std::fs::create_dir_all(dir)?;
+            }
+        }
+        let mut tmp = target.clone().into_os_string();
+        tmp.push(".airpdf-tmp");
+        let tmp = std::path::PathBuf::from(tmp);
         std::fs::write(&tmp, &data)?;
         match std::fs::rename(&tmp, &target) {
             Ok(()) => Ok(()),
@@ -57,21 +71,171 @@ async fn write_file(request: Request<'_>) -> Result<(), String> {
     .map_err(|e| e.to_string())
 }
 
-fn pdf_args<I: IntoIterator<Item = String>>(args: I) -> Vec<String> {
-    args.into_iter()
-        .filter(|a| !a.starts_with('-'))
-        .filter(|a| a.to_lowercase().ends_with(".pdf"))
-        .collect()
+/* ───────────── 글꼴 ───────────── */
+
+#[derive(Serialize)]
+struct FontInfo {
+    family: String,
+    path: String,
+    index: u32,
+    korean: bool,
+}
+
+/// 이 컴퓨터에 설치된 글꼴 중 PDF에 넣을 수 있는 것 (TrueType 윤곽, 넣기 허락된 것)만, 글꼴 가족마다 보통 굵기 하나
+#[tauri::command]
+async fn list_fonts() -> Vec<FontInfo> {
+    tauri::async_runtime::spawn_blocking(|| {
+        let mut db = fontdb::Database::new();
+        db.load_system_fonts();
+        // 가족 이름 → (보통 굵기에서 먼 정도, 정보)
+        let mut best: std::collections::HashMap<String, (u32, FontInfo)> = Default::default();
+        for face in db.faces() {
+            let (fontdb::Source::File(path) | fontdb::Source::SharedFile(path, _)) = &face.source else { continue };
+            let family = face
+                .families
+                .iter()
+                .find(|(_, l)| *l == fontdb::Language::Korean_Korea)
+                .or_else(|| face.families.first())
+                .map(|(n, _)| n.clone());
+            let Some(family) = family else { continue };
+            let off = (face.weight.0 as i32 - 400).unsigned_abs() + if face.style == fontdb::Style::Normal { 0 } else { 1000 };
+            if best.get(&family).is_some_and(|(o, _)| *o <= off) {
+                continue;
+            }
+            let Some((ok, korean)) = db.with_face_data(face.id, |data, index| {
+                let Ok(f) = ttf_parser::Face::parse(data, index) else { return (false, false) };
+                let embeddable = !matches!(f.permissions(), Some(ttf_parser::Permissions::Restricted));
+                let ok = f.tables().glyf.is_some() && embeddable;
+                (ok, f.glyph_index('한').is_some() && f.glyph_index('글').is_some())
+            }) else { continue };
+            if !ok {
+                continue;
+            }
+            best.insert(
+                family.clone(),
+                (off, FontInfo { family, path: path.to_string_lossy().into_owned(), index: face.index, korean }),
+            );
+        }
+        best.into_values().map(|(_, f)| f).collect()
+    })
+    .await
+    .unwrap_or_default()
+}
+
+/* ───────────── 기본 PDF 프로그램 (Windows) ───────────── */
+
+#[cfg(windows)]
+mod winassoc {
+    use winreg::{enums::*, RegKey};
+    pub const PROGID: &str = "AirPDF.Document";
+    /// "기본 앱" 설정 화면에 Air PDF가 나오도록 등록 (설치 프로그램도 하지만 옮겨 쓰는 경우를 위해 한 번 더)
+    pub fn register() -> std::io::Result<()> {
+        let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+        let exe = std::env::current_exe()?.to_string_lossy().into_owned();
+        let (pk, _) = hkcu.create_subkey(format!(r"Software\Classes\{PROGID}"))?;
+        pk.set_value("", &"PDF 문서")?;
+        let (ic, _) = pk.create_subkey("DefaultIcon")?;
+        ic.set_value("", &format!("\"{exe}\",0"))?;
+        let (cmd, _) = pk.create_subkey(r"shell\open\command")?;
+        cmd.set_value("", &format!("\"{exe}\" \"%1\""))?;
+        let (ow, _) = hkcu.create_subkey(r"Software\Classes\.pdf\OpenWithProgids")?;
+        ow.set_value(PROGID, &"")?;
+        let (cap, _) = hkcu.create_subkey(r"Software\AirPDF\Capabilities")?;
+        cap.set_value("ApplicationName", &"Air PDF")?;
+        cap.set_value("ApplicationDescription", &"문서는 가볍게, 작업은 자유롭게")?;
+        let (fa, _) = cap.create_subkey("FileAssociations")?;
+        fa.set_value(".pdf", &PROGID)?;
+        let (ra, _) = hkcu.create_subkey(r"Software\RegisteredApplications")?;
+        ra.set_value("AirPDF", &r"Software\AirPDF\Capabilities")?;
+        Ok(())
+    }
+    pub fn is_default() -> bool {
+        let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+        hkcu.open_subkey(r"Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.pdf\UserChoice")
+            .and_then(|k| k.get_value::<String, _>("ProgId"))
+            .map(|p| p.eq_ignore_ascii_case(PROGID) || p.to_lowercase().contains("airpdf"))
+            .unwrap_or(false)
+    }
+}
+
+/// 지금 기본 PDF 프로그램인가 (Windows가 아니면 null)
+#[tauri::command]
+fn default_app_status() -> Option<bool> {
+    #[cfg(windows)]
+    return Some(winassoc::is_default());
+    #[cfg(not(windows))]
+    None
+}
+
+/// Windows 10/11은 앱이 직접 바꿀 수 없어서, 등록한 뒤 "기본 앱" 설정 화면을 Air PDF 쪽으로 연다
+#[tauri::command]
+fn make_default_app() -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        winassoc::register().map_err(|e| e.to_string())?;
+        unsafe { SHChangeNotify(0x0800_0000, 0, std::ptr::null(), std::ptr::null()) };
+        std::process::Command::new("cmd")
+            .args(["/C", "start", "", "ms-settings:defaultapps?registeredAppUser=AirPDF"])
+            .creation_flags(0x0800_0000)
+            .spawn()
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let ok = std::process::Command::new("xdg-mime")
+            .args(["default", "air-pdf.desktop", "application/pdf"])
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        if ok { Ok(()) } else { Err("xdg-mime으로 바꾸지 못했습니다".into()) }
+    }
+    #[cfg(target_os = "macos")]
+    Err("Finder에서 PDF 파일 정보 가져오기 → 다음으로 열기 → 모두 변경을 눌러 주세요".into())
+}
+
+#[cfg(windows)]
+#[link(name = "shell32")]
+extern "system" {
+    fn SHChangeNotify(event: i32, flags: u32, a: *const std::ffi::c_void, b: *const std::ffi::c_void);
+}
+
+/* ───────────── 명령줄 ───────────── */
+
+const IMAGE_EXT: [&str; 6] = [".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif"];
+
+/// `air-pdf.exe [--merge|--split|--to-images|--to-pdf] 파일...`
+fn parse_args<I: IntoIterator<Item = String>>(args: I) -> Batch {
+    let mut b = Batch::default();
+    for a in args {
+        if let Some(m) = a.strip_prefix("--") {
+            if ["merge", "split", "to-images", "to-pdf"].contains(&m) {
+                b.mode = Some(m.to_owned());
+            }
+            continue;
+        }
+        let l = a.to_lowercase();
+        if l.ends_with(".pdf") || IMAGE_EXT.iter().any(|e| l.ends_with(e)) {
+            b.files.push(a);
+        }
+    }
+    // 이미지는 "PDF로 만들기"로만 받는다
+    if b.mode.as_deref() != Some("to-pdf") {
+        b.files.retain(|f| f.to_lowercase().ends_with(".pdf"));
+    }
+    b
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let app = tauri::Builder::default()
-        // 이미 켜져 있으면 새 창을 띄우지 않고 그 창에 탭으로 연다
+        // 이미 켜져 있으면 새 창을 띄우지 않고 그 창에 탭으로 연다.
+        // 탐색기에서 여러 파일을 골라 메뉴를 누르면 파일마다 실행되므로, 화면 쪽에서 잠깐 모아서 한 번에 처리한다.
         .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
-            let files = pdf_args(argv.into_iter().skip(1));
-            if !files.is_empty() {
-                let _ = app.emit("open-files", files);
+            let b = parse_args(argv.into_iter().skip(1));
+            if !b.files.is_empty() {
+                let _ = app.emit("open-files", b);
             }
             if let Some(w) = app.get_webview_window("main") {
                 let _ = w.unminimize();
@@ -80,8 +244,17 @@ pub fn run() {
         }))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
-        .manage(Pending(Mutex::new(pdf_args(std::env::args().skip(1)))))
-        .invoke_handler(tauri::generate_handler![initial_files, read_file, write_file])
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
+        .manage(Pending(Mutex::new(parse_args(std::env::args().skip(1)))))
+        .invoke_handler(tauri::generate_handler![
+            initial_files,
+            read_file,
+            write_file,
+            list_fonts,
+            default_app_status,
+            make_default_app
+        ])
         .build(tauri::generate_context!())
         .expect("Air PDF를 시작하지 못했습니다");
 
@@ -89,16 +262,33 @@ pub fn run() {
         // macOS: Finder에서 PDF를 열면 경로가 이벤트로 온다
         #[cfg(any(target_os = "macos", target_os = "ios"))]
         if let tauri::RunEvent::Opened { urls } = &event {
-            let paths: Vec<String> = urls
+            let files: Vec<String> = urls
                 .iter()
                 .filter_map(|u| u.to_file_path().ok())
                 .map(|p| p.to_string_lossy().into_owned())
                 .collect();
             if let Some(p) = handle.try_state::<Pending>() {
-                p.0.lock().unwrap().extend(paths.clone());
+                p.0.lock().unwrap().files.extend(files.clone());
             }
-            let _ = handle.emit("open-files", paths);
+            let _ = handle.emit("open-files", Batch { mode: None, files });
         }
         let _ = (&handle, &event);
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_args;
+    fn v(a: &[&str]) -> Vec<String> { a.iter().map(|s| s.to_string()).collect() }
+    #[test]
+    fn modes_and_files() {
+        let b = parse_args(v(&["--merge", r"C:\a\x.pdf", r"C:\a\y.PDF", r"C:\a\p.jpg"]));
+        assert_eq!(b.mode.as_deref(), Some("merge"));
+        assert_eq!(b.files, v(&[r"C:\a\x.pdf", r"C:\a\y.PDF"]));
+        let b = parse_args(v(&["--to-pdf", "a.png", "b.JPEG", "c.txt"]));
+        assert_eq!(b.files, v(&["a.png", "b.JPEG"]));
+        let b = parse_args(v(&["doc.pdf", "--unknown"]));
+        assert!(b.mode.is_none());
+        assert_eq!(b.files, v(&["doc.pdf"]));
+    }
 }

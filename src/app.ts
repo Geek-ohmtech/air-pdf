@@ -1,11 +1,12 @@
 import type { EngineClient } from './engine/client.ts';
 import type { DocInfo, LinkInfo, OutlineItem, SearchHit } from './engine/types.ts';
 import { FormLayer } from './viewer/forms.ts';
-import type { OpenedFile, Platform, SavedTarget } from './platform/types.ts';
+import { Shortcuts } from './shortcuts.ts';
+import type { Batch, BatchMode, OpenedFile, Platform, SavedTarget, UpdateInfo } from './platform/types.ts';
 import { baseName } from './platform/types.ts';
 import { DocView } from './viewer/docview.ts';
 import { Sidebar } from './viewer/sidebar.ts';
-import { $, busy, confirmBox, dialog, esc, h, icon, menu, promptBox, toast } from './ui/dom.ts';
+import { $, busy, confirmBox, dialog, esc, h, hscroll, icon, menu, promptBox, toast } from './ui/dom.ts';
 import type { Editor } from './editor/editor.ts';
 
 export interface DocState {
@@ -16,6 +17,23 @@ type Mode = 'view' | 'edit';
 const PREF = 'airpdf.prefs';
 export const fmtSize = (n: number) => n < 1048576 ? `${Math.max(1, Math.round(n / 1024))}KB` : `${(n / 1048576).toFixed(2)}MB`;
 
+/** 앱 아이콘 (public/icon.svg와 같은 그림). 한 화면에 여러 개 넣어도 id가 겹치지 않게 접두어를 붙인다 */
+const ICON_BODY = `  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#2f6fdc"/><stop offset="1" stop-color="#173a8c"/></linearGradient>
+    <linearGradient id="fe" x1="0" y1="1" x2="1" y2="0"><stop offset="0" stop-color="#7cc4ff"/><stop offset="1" stop-color="#c9ecff"/></linearGradient>
+  </defs>
+  <rect x="32" y="32" width="960" height="960" rx="220" fill="url(#bg)"/>
+  <g fill="none" stroke="#fff" stroke-linecap="round" stroke-linejoin="round" stroke-width="78">
+    <path d="M232 726 L372 318 L512 726"/>
+    <path d="M612 488 V726"/>
+    <path d="M722 726 V488 M722 590 C736 520 790 484 852 492"/>
+  </g>
+  <circle cx="612" cy="368" r="46" fill="#fff"/>
+  <!-- A의 가로획 대신 깃털 -->
+  <path d="M168 684 C280 606 420 536 584 446 C520 586 380 690 168 684 Z" fill="url(#fe)"/>
+  <path d="M200 670 C330 604 450 540 566 462" fill="none" stroke="#2f6fdc" stroke-width="10" stroke-linecap="round" opacity=".55"/>
+`;
+const appIcon = (p: string) => `<svg viewBox="0 0 1024 1024" aria-hidden="true">${ICON_BODY.replace(/id="(\w+)"/g, `id="${p}$1"`).replace(/url\(#(\w+)\)/g, `url(#${p}$1)`)}</svg>`;
 export class App {
   engine: EngineClient; platform: Platform;
   root: HTMLElement; ribbon: HTMLElement; stage: HTMLElement; status: HTMLElement;
@@ -23,7 +41,8 @@ export class App {
   doc: DocState | null = null;
   tabs: DocState[] = [];
   forms!: FormLayer;
-  private tabbar!: HTMLElement;
+  shortcuts: Shortcuts;
+  private tabbar!: HTMLElement; private tabbarWrap!: HTMLElement; ribbonWrap!: HTMLElement;
   mode: Mode = 'view';
   editor: Editor | null = null;
   private start: HTMLElement;
@@ -31,20 +50,25 @@ export class App {
   private searchInput!: HTMLInputElement; private saveBtn!: HTMLButtonElement; private modeBtns!: HTMLElement;
   private hits: SearchHit[] = []; private hitByPage = new Map<number, SearchHit[]>(); private hitIdx = -1; private lastQuery = '';
   private searchOpts = { matchCase: false, wholeWord: false };
-  prefs = { theme: 'system', spread: false, night: false, sidebar: true, author: '' };
+  prefs: { theme: string; spread: boolean; night: boolean; sidebar: boolean; author: string; shortcuts?: Record<string, string[]>; autoUpdate?: boolean } = { theme: 'system', spread: false, night: false, sidebar: true, author: '' };
 
   constructor(engine: EngineClient, platform: Platform) {
     this.engine = engine; this.platform = platform;
     try { Object.assign(this.prefs, JSON.parse(localStorage.getItem(PREF) || '{}')); } catch { /* 기본값 */ }
     this.applyTheme();
+    this.shortcuts = new Shortcuts(this.prefs.shortcuts || {}, c => { this.prefs.shortcuts = c; this.savePrefs(); });
     this.root = h('div', { id: 'app', class: 'mode-view no-doc' });
     const top = this.buildTopbar();
-    this.ribbon = h('div', { class: 'ribbon', hidden: true });
+    this.ribbon = h('div', { class: 'ribbon' });
     this.stage = h('div', { class: 'stage' });
     const main = h('div', { class: 'main' }, this.stage);
     this.status = h('footer', { class: 'statusbar' });
-    this.tabbar = h('div', { class: 'tabbar', role: 'tablist', hidden: true });
-    this.root.append(top, this.tabbar, this.ribbon, main, this.status);
+    this.tabbar = h('div', { class: 'tabbar', role: 'tablist' });
+    this.tabbarWrap = h('div', { class: 'tabbar-wrap', hidden: true }, this.tabbar);
+    hscroll(this.tabbarWrap, this.tabbar);
+    this.ribbonWrap = h('div', { class: 'ribbon-wrap', hidden: true }, this.ribbon);
+    hscroll(this.ribbonWrap, this.ribbon);
+    this.root.append(top, this.tabbarWrap, this.ribbonWrap, main, this.status);
     document.body.append(this.root);
     this.view = new DocView(this.stage, engine);
     this.sidebar = new Sidebar(main, this.view);
@@ -59,14 +83,86 @@ export class App {
     this.view.onSelect = () => this.updateStatus();
     this.sidebar.onSearchPick = hit => this.gotoHit(this.hits.indexOf(hit));
     this.forms = new FormLayer(this);
+    // 쪽 목록 편집은 보기 모드에서도 된다 (되돌리기 기록은 편집기와 함께 쓴다)
+    this.sidebar.onMovePage = (key, to) => this.pageEditor().then(ed => ed.movePage(key, to));
+    this.sidebar.onThumbMenu = (e, i) => this.pageEditor().then(ed => ed.thumbMenu(e, i));
+    this.sidebar.onDeleteKey = () => this.pageEditor().then(ed => ed.deletePages());
+    this.sidebar.onDropFiles = async (files, at) => {
+      const ed = await this.pageEditor();
+      const pdfs = files.filter(f => /\.pdf$/i.test(f.name) || f.type === 'application/pdf');
+      const imgs = files.filter(f => f.type.startsWith('image/'));
+      if (pdfs.length) await ed.mergePdf(await Promise.all(pdfs.map(async f => ({ name: f.name, bytes: new Uint8Array(await f.arrayBuffer()) }))), at);
+      if (imgs.length) await ed.imagePages(imgs, at);
+      if (!pdfs.length && !imgs.length) toast('PDF나 이미지 파일만 넣을 수 있습니다.');
+    };
     this.bindKeys();
     this.bindDrop();
-    platform.onExternalOpen(files => this.openFiles(files));
+    platform.onExternalOpen(b => this.handleBatch(b));
     platform.onCloseRequest(async () => {
       const dirty = this.tabs.filter(t => t.dirty);
       return !dirty.length || await confirmBox('저장하지 않은 변경 사항', `${dirty.map(t => '“' + t.name + '”').join(', ')}에 저장하지 않은 편집 내용이 있습니다. 저장하지 않고 닫을까요?`, '저장하지 않고 닫기', true);
     });
     this.updateStatus();
+    if (platform.checkUpdate && this.prefs.autoUpdate !== false) setTimeout(() => this.checkUpdate(false), 4000);
+  }
+  /* ───────────── 탐색기에서 넘어온 일 ───────────── */
+  private batchBuf: { mode: BatchMode; files: OpenedFile[] } | null = null; private batchT = 0;
+  /** 여러 파일을 골라 탐색기 메뉴를 누르면 파일마다 따로 들어오므로, 잠깐 모았다가 한 번에 처리한다 */
+  async handleBatch(b: Batch) {
+    if (!b.mode) { if (b.files.length) await this.openFiles(b.files); return; }
+    if (this.batchBuf && this.batchBuf.mode !== b.mode) this.flushBatch();
+    if (!this.batchBuf) this.batchBuf = { mode: b.mode, files: [] };
+    for (const f of b.files) if (!this.batchBuf.files.some(x => x.path && x.path === f.path)) this.batchBuf.files.push(f);
+    clearTimeout(this.batchT); this.batchT = window.setTimeout(() => this.flushBatch(), 700);
+  }
+  private flushBatch() {
+    const b = this.batchBuf; this.batchBuf = null; clearTimeout(this.batchT);
+    if (!b?.files.length) return;
+    const by = (a: OpenedFile, c: OpenedFile) => a.name.localeCompare(c.name, 'ko', { numeric: true });
+    const files = [...b.files].sort(by);
+    import('./tools.ts').then(m => {
+      if (b.mode === 'merge') return files.length > 1 ? m.mergeFiles(this, files) : this.openFiles(files);
+      if (b.mode === 'split') return m.splitPdf(this, files);
+      if (b.mode === 'to-images') return m.pdfsToImages(this, files);
+      if (b.mode === 'to-pdf') {
+        const imgs = files.filter(f => !/\.pdf$/i.test(f.name)).map(f => new File([f.bytes as BlobPart], f.name));
+        return imgs.length ? m.imagesToPdf(this, imgs) : this.openFiles(files);
+      }
+    });
+  }
+  /* ───────────── 업데이트 / 기본 프로그램 ───────────── */
+  async checkUpdate(manual: boolean) {
+    const P = this.platform; if (!P.checkUpdate) return;
+    let u: UpdateInfo | null = null;
+    try { u = await P.checkUpdate(); }
+    catch (e: any) { if (manual) toast('업데이트를 확인하지 못했습니다: ' + (e?.message || e)); return; }
+    if (!u) { if (manual) toast(`최신 버전입니다 (${await P.version?.() || ''}).`); return; }
+    const info = u;
+    document.querySelector('.update-bar')?.remove();
+    const bar = h('div', { class: 'update-bar', role: 'status' },
+      h('span', {}, '새 버전 ', h('b', {}, info.version), '이 나왔습니다.'),
+      h('button', { class: 'btn sm', type: 'button', onclick: () => bar.remove() }, '나중에'),
+      h('button', { class: 'btn sm primary', type: 'button', onclick: () => this.installUpdate(info, bar) }, '지금 업데이트'));
+    if (info.notes) bar.title = info.notes;
+    document.body.append(bar);
+  }
+  private async installUpdate(u: UpdateInfo, bar: HTMLElement) {
+    if (this.tabs.some(t => t.dirty) && !await confirmBox('업데이트', '저장하지 않은 문서가 있습니다. 업데이트하면 프로그램이 다시 시작되어 편집 내용이 사라집니다. 계속할까요?', '업데이트', true)) return;
+    bar.remove();
+    const b = busy('업데이트를 받는 중…');
+    try { await u.install((done, total) => b.set(total ? `업데이트를 받는 중… ${Math.round(done / total * 100)}%` : `업데이트를 받는 중… ${Math.round(done / 1048576)}MB`)); }
+    catch (e: any) { b.done(); toast('업데이트하지 못했습니다: ' + (e?.message || e)); }
+  }
+  async makeDefault() {
+    const D = this.platform.defaultApp; if (!D) return;
+    try {
+      await D.make();
+      await dialog({ title: '기본 PDF 프로그램', body: h('div', { class: 'form' },
+        h('p', {}, 'Windows 설정의 “기본 앱” 화면을 열었습니다.'),
+        h('p', {}, '“.pdf” 항목을 눌러 ', h('b', {}, 'Air PDF'), '를 고르면 끝납니다. (Windows는 보안상 프로그램이 직접 바꾸지 못하게 되어 있습니다.)'),
+        h('p', { class: 'hint' }, '설정 화면이 열리지 않으면: PDF 파일을 오른쪽 단추로 누르고 → 연결 프로그램 → 다른 앱 선택 → Air PDF → “항상”을 누르세요.')),
+        buttons: [{ label: '확인', value: true, primary: true }] });
+    } catch (e: any) { toast(String(e?.message || e)); }
   }
   savePrefs() { try { localStorage.setItem(PREF, JSON.stringify(this.prefs)); } catch { /* */ } }
   applyTheme() {
@@ -97,10 +193,10 @@ export class App {
     this.modeBtns = h('div', { class: 'mode-switch', role: 'group', 'aria-label': '모드' },
       h('button', { type: 'button', class: 'mode-b', dataset: { m: 'view' }, 'aria-pressed': 'true', title: '보기 모드 (Ctrl+E로 전환)', onclick: () => this.setMode('view') }, icon('view'), h('span', {}, '보기')),
       h('button', { type: 'button', class: 'mode-b', dataset: { m: 'edit' }, 'aria-pressed': 'false', title: '편집 모드 (Ctrl+E로 전환)', onclick: () => this.setMode('edit') }, icon('edit'), h('span', {}, '편집')));
-    return h('header', { class: 'topbar' },
+    const inner = h('div', { class: 'tb-inner' },
       h('div', { class: 'tb-group' },
         this.tb('sidebar', '탐색 패널 (F12)', () => this.toggleSidebar()),
-        h('span', { class: 'brand' }, h('span', { class: 'brand-mark', html: '<svg viewBox="0 0 24 24"><path d="M4.5 2h10.5l4.5 4.5V22H4.5z" fill="var(--accent)"/><path d="M15 2v4.5h4.5" fill="none" stroke="var(--on-accent)" stroke-width="1.2" opacity=".6"/><path d="M8.3 18.6c-.2-5 2.4-8.4 7-9.6-.1 4.6-2.8 8.2-7 9.6z" fill="var(--on-accent)"/><path d="M7.2 20.1l6.9-9.3" stroke="var(--accent)" stroke-width=".9" stroke-linecap="round"/></svg>' }), h('span', { class: 'brand-name' }, 'Air PDF')),
+        h('span', { class: 'brand' }, h('span', { class: 'brand-mark', html: appIcon('tb') }), h('span', { class: 'brand-name' }, 'Air PDF')),
         this.tb('open', '열기 (Ctrl+O)', () => this.pickAndOpen()),
         this.saveBtn),
       h('div', { class: 'tb-group nav-group needs-doc' },
@@ -114,14 +210,18 @@ export class App {
         this.tb('fit', '쪽 너비 맞춤 (Ctrl+2)', () => this.setFit('width'))),
       h('div', { class: 'tb-spacer' }),
       h('div', { class: 'search-box needs-doc' }, icon('search'), this.searchInput, optBtn('Aa', 'matchCase', '대소문자 구분'), optBtn('낱말', 'wholeWord', '낱말 단위')),
-      h('div', { class: 'tb-group' }, this.modeBtns, this.tb('more', '메뉴', () => this.mainMenu())));
+      h('div', { class: 'tb-group' }, this.modeBtns, h('button', { class: 'tb more-btn', type: 'button', title: '메뉴', 'aria-label': '메뉴', onclick: () => this.mainMenu() }, icon('more'))));
+    const head = h('header', { class: 'topbar' }, inner);
+    hscroll(head, inner);
+    return head;
   }
   private buildStart() {
     const recent = this.platform.recent();
     return h('div', { class: 'start' },
       h('div', { class: 'start-card' },
-        h('div', { class: 'start-mark', html: '<svg viewBox="0 0 24 24"><path d="M4.5 2h10.5l4.5 4.5V22H4.5z" fill="var(--accent)"/><path d="M15 2v4.5h4.5" fill="none" stroke="var(--on-accent)" stroke-width="1.2" opacity=".6"/><path d="M8.3 18.6c-.2-5 2.4-8.4 7-9.6-.1 4.6-2.8 8.2-7 9.6z" fill="var(--on-accent)"/><path d="M7.2 20.1l6.9-9.3" stroke="var(--accent)" stroke-width=".9" stroke-linecap="round"/></svg>' }),
-        h('h1', {}, 'Air PDF'),
+        h('div', { class: 'start-mark', html: appIcon('st') }),
+        h('h1', { class: 'start-logo' }, 'Air', h('span', {}, ' PDF')),
+        h('p', { class: 'start-slogan' }, '문서는 가볍게, 작업은 자유롭게'),
         h('p', { class: 'start-sub' }, '빠르게 보고, 필요할 때만 편집 모드로 고칩니다.'),
         h('div', { class: 'start-btns' }, h('button', { class: 'btn primary big', type: 'button', onclick: () => this.pickAndOpen() }, icon('open'), 'PDF 열기'),
           h('button', { class: 'btn big', type: 'button', onclick: () => import('./tools.ts').then(m => m.imagesToPdf(this)) }, icon('image'), '이미지로 PDF 만들기')),
@@ -234,7 +334,7 @@ export class App {
   }
   renderTabs() {
     const bar = this.tabbar;
-    bar.hidden = this.tabs.length < 2;
+    this.tabbarWrap.hidden = this.tabs.length < 2;
     bar.innerHTML = '';
     for (const t of this.tabs) {
       const b = h('div', { class: 'tab' + (t === this.doc ? ' on' : ''), role: 'tab', 'aria-selected': String(t === this.doc), title: t.target?.path || t.name, tabindex: '0' },
@@ -293,6 +393,12 @@ export class App {
   }
   refreshPage(key: number) { this.view.invalidate(key); this.sidebar.refreshThumb(key); }
 
+  /** 편집 기능(쪽 다루기·되돌리기)을 보기 모드에서도 쓰기 위해 편집기를 불러 둔다 */
+  async pageEditor(): Promise<Editor> {
+    if (!this.editor) { const { Editor } = await import('./editor/editor.ts'); this.editor = new Editor(this); this.editor.loadState(this.doc?.editorState); }
+    return this.editor;
+  }
+
   /* ───────────── 모드 ───────────── */
   async setMode(m: Mode) {
     if (m === this.mode) return;
@@ -306,19 +412,18 @@ export class App {
     if (m === 'edit') {
       if (!this.editor) {
         const b = busy('편집 도구를 불러오는 중…');
-        try { const { Editor } = await import('./editor/editor.ts'); this.editor = new Editor(this); } finally { b.done(); }
+        try { await this.pageEditor(); } finally { b.done(); }
       }
       this.view.clearSelection();
-      this.ribbon.hidden = false;
+      this.ribbonWrap.hidden = false;
       await this.editor!.activate();
     } else {
       this.editor?.deactivate();
-      this.ribbon.hidden = true;
+      this.ribbonWrap.hidden = true;
       this.view.interaction = null; this.view.decorate = null;
       this.view.el.style.cursor = '';
       this.view.refreshLinks();
     }
-    this.sidebar.editable = m === 'edit';
     this.sidebar.buildThumbs();
     requestAnimationFrame(() => { if (this.view.fit) this.view.applyFit(true); });
     this.updateStatus();
@@ -419,7 +524,7 @@ export class App {
 
   /* ───────────── 메뉴 / 상태 표시줄 ───────────── */
   private mainMenu() {
-    const btn = this.root.querySelector('.topbar .tb-group:last-child .tb:last-child') as HTMLElement;
+    const btn = this.root.querySelector('.topbar .more-btn') as HTMLElement;
     const r = btn.getBoundingClientRect();
     menu({ x: r.right - 240, y: r.bottom + 4 }, [
       { label: '열기…', icon: 'open', hint: 'Ctrl+O', action: () => this.pickAndOpen() },
@@ -428,14 +533,19 @@ export class App {
       { label: '인쇄…', icon: 'print', hint: 'Ctrl+P', action: () => this.print(), disabled: !this.doc }, '-',
       { label: '이미지로 PDF 만들기…', icon: 'image', action: () => import('./tools.ts').then(m => m.imagesToPdf(this)) },
       { label: '쪽을 이미지로 내보내기…', icon: 'extract', action: () => import('./tools.ts').then(m => m.exportImages(this)), disabled: !this.doc },
-      { label: 'PDF 용량 줄이기…', icon: 'compress', action: () => import('./tools.ts').then(m => m.compressPdf(this)), disabled: !this.doc }, '-',
+      { label: 'PDF 용량 줄이기…', icon: 'compress', action: () => import('./tools.ts').then(m => m.compressPdf(this)), disabled: !this.doc },
+      { label: 'PDF 나누기…', icon: 'split', hint: this.shortcuts.label('split'), action: () => import('./tools.ts').then(m => m.splitPdf(this)), disabled: !this.doc },
+      { label: 'PDF 여러 개 합치기…', icon: 'merge', action: () => import('./tools.ts').then(m => m.mergeFiles(this)) }, '-',
       { label: '문서 닫기', icon: 'close', hint: 'Ctrl+W', action: () => this.closeDoc(), disabled: !this.doc }, '-',
       { label: '두 쪽씩 보기', icon: 'spread', action: () => { this.prefs.spread = !this.prefs.spread; this.savePrefs(); this.view.setSpread(this.prefs.spread); }, checked: this.prefs.spread },
       { label: '야간 보기 (색 반전)', icon: 'moon', action: () => { this.prefs.night = !this.prefs.night; this.savePrefs(); this.view.setNight(this.prefs.night); }, checked: this.prefs.night },
       { label: '전체 화면', icon: 'full', hint: 'F11', action: () => this.platform.toggleFullscreen() },
       { label: '화면 테마: ' + ({ system: '시스템', light: '밝게', dark: '어둡게' } as any)[this.prefs.theme], icon: 'theme', action: () => { this.prefs.theme = this.prefs.theme === 'system' ? 'light' : this.prefs.theme === 'light' ? 'dark' : 'system'; this.applyTheme(); this.savePrefs(); } }, '-',
       { label: '문서 정보', icon: 'info', action: () => this.docInfo(), disabled: !this.doc },
-      { label: '단축키', icon: 'keyboard', hint: 'F1', action: () => this.shortcuts() },
+      { label: '단축키', icon: 'keyboard', hint: 'F1', action: () => this.showShortcuts() },
+      ...(this.platform.defaultApp ? ['-' as const, { label: '기본 PDF 프로그램으로 지정…', icon: 'pin' as const, action: () => this.makeDefault() }] : []),
+      ...(this.platform.checkUpdate ? [{ label: '업데이트 확인', icon: 'update' as const, action: () => this.checkUpdate(true) },
+        { label: '자동으로 업데이트 확인', icon: 'update' as const, checked: this.prefs.autoUpdate !== false, action: () => { this.prefs.autoUpdate = this.prefs.autoUpdate === false; this.savePrefs(); } }] : []),
     ]);
   }
   updateStatus() {
@@ -465,17 +575,7 @@ export class App {
       row('보안', i.encrypted ? '암호로 보호됨' : '없음')),
       buttons: [{ label: '닫기', value: true, primary: true }] });
   }
-  shortcuts() {
-    const rows: [string, string][] = [
-      ['Ctrl+O', '열기'], ['Ctrl+S / Ctrl+Shift+S', '저장 / 다른 이름으로'], ['Ctrl+P', '인쇄'], ['Ctrl+W', '문서 닫기'],
-      ['Ctrl+E', '보기 ↔ 편집 모드'], ['Ctrl+F, F3, Shift+F3', '찾기, 다음, 이전'], ['Ctrl+G', '쪽으로 이동'],
-      ['N / P, Home / End', '다음·이전 쪽, 처음·끝'], ['Ctrl+= / Ctrl+-, Ctrl+휠', '확대 / 축소'], ['Ctrl+0 / 1 / 2', '쪽 맞춤 / 실제 크기 / 너비 맞춤'],
-      ['Ctrl+C, Ctrl+A', '선택 글자 복사, 이 쪽 모두 선택'], ['F11, F12', '전체 화면, 탐색 패널'],
-      ['편집: V T E I B', '선택, 글자 추가, 글자 고치기, 이미지, 표'], ['편집: H U S N D', '형광펜, 밑줄, 취소선, 메모, 펜'],
-      ['편집: Ctrl+Z / Ctrl+Y', '되돌리기 / 다시 하기'], ['편집: Delete, 화살표', '선택한 것 지우기, 옮기기'],
-    ];
-    dialog({ title: '단축키', wide: true, body: h('table', { class: 'keys-table' }, ...rows.map(([k, v]) => h('tr', {}, h('td', {}, ...k.split(', ').flatMap((x, i) => [i ? ', ' : '', h('kbd', {}, x)])), h('td', {}, v)))), buttons: [{ label: '닫기', value: true, primary: true }] });
-  }
+  showShortcuts() { this.shortcuts.openDialog(); }
   private contextMenu(e: MouseEvent, page: number, x: number, y: number) {
     if (this.mode === 'edit' && this.editor?.contextMenu(e, page, x, y)) return;
     const sel = this.view.selectedText();
@@ -521,43 +621,76 @@ export class App {
 
   /* ───────────── 키보드 / 끌어다 놓기 ───────────── */
   private bindKeys() {
+    const S = this.shortcuts;
+    const doc = () => !!this.doc, edit = () => this.mode === 'edit' && !!this.doc;
+    const ed = (fn: (e: Editor) => void) => () => { if (this.doc) this.pageEditor().then(fn); };
+    const tools = (m: any) => import('./tools.ts').then(m);
+    const noHScroll = () => doc() && this.view.el.scrollWidth <= this.view.el.clientWidth;
+    S.add(
+      { id: 'open', group: '파일', label: '열기', keys: ['Ctrl+O'], run: () => this.pickAndOpen(), allowTyping: true },
+      { id: 'save', group: '파일', label: '저장', keys: ['Ctrl+S'], run: () => this.save(false), allowTyping: true },
+      { id: 'saveAs', group: '파일', label: '다른 이름으로 저장', keys: ['Ctrl+Shift+S'], run: () => this.save(true), allowTyping: true },
+      { id: 'print', group: '파일', label: '인쇄', keys: ['Ctrl+P'], run: () => this.print(), when: doc, allowTyping: true },
+      { id: 'compress', group: '파일', label: 'PDF 용량 줄이기', keys: ['Ctrl+Shift+M'], run: () => tools((m: any) => m.compressPdf(this)), when: doc },
+      { id: 'split', group: '파일', label: 'PDF 나누기', keys: ['Ctrl+Shift+D'], run: () => tools((m: any) => m.splitPdf(this)), when: doc },
+      { id: 'img2pdf', group: '파일', label: '이미지로 PDF 만들기', keys: ['Ctrl+Shift+I'], run: () => tools((m: any) => m.imagesToPdf(this)) },
+      { id: 'pdf2img', group: '파일', label: '쪽을 이미지로 내보내기', keys: ['Ctrl+Shift+E'], run: () => tools((m: any) => m.exportImages(this)), when: doc },
+      { id: 'info', group: '파일', label: '문서 정보', keys: ['Ctrl+D'], run: () => this.docInfo(), when: doc },
+      { id: 'closeTab', group: '탭', label: '탭 닫기', keys: ['Ctrl+W', 'Ctrl+F4'], run: () => this.closeDoc(), allowTyping: true },
+      { id: 'nextTab', group: '탭', label: '다음 탭', keys: ['Ctrl+Tab', 'Ctrl+PageDown'], run: () => this.cycleTab(1), allowTyping: true },
+      { id: 'prevTab', group: '탭', label: '이전 탭', keys: ['Ctrl+Shift+Tab', 'Ctrl+PageUp'], run: () => this.cycleTab(-1), allowTyping: true },
+      ...[1, 2, 3, 4, 5, 6, 7, 8, 9].map(n => ({ id: 'tab' + n, group: '탭', label: n === 9 ? '마지막 탭' : `${n}번째 탭`, keys: ['Alt+' + n], run: () => { const t = n === 9 ? this.tabs[this.tabs.length - 1] : this.tabs[n - 1]; if (t) this.activate(t); } })),
+      { id: 'mode', group: '보기', label: '보기 ↔ 편집 모드', keys: ['Ctrl+E'], run: () => this.setMode(this.mode === 'edit' ? 'view' : 'edit'), allowTyping: true },
+      { id: 'sidebar', group: '보기', label: '탐색 패널 보이기/숨기기', keys: ['F12', 'Ctrl+Shift+B'], run: () => this.toggleSidebar(), allowTyping: true },
+      { id: 'fullscreen', group: '보기', label: '전체 화면', keys: ['F11'], run: () => this.platform.toggleFullscreen(), allowTyping: true },
+      { id: 'zoomIn', group: '보기', label: '확대', keys: ['Ctrl+=', 'Ctrl+Shift+='], run: () => this.zoomStep(1), when: doc },
+      { id: 'zoomOut', group: '보기', label: '축소', keys: ['Ctrl+-'], run: () => this.zoomStep(-1), when: doc },
+      { id: 'fitPage', group: '보기', label: '쪽 전체 맞춤', keys: ['Ctrl+0'], run: () => this.setFit('page'), when: doc },
+      { id: 'actual', group: '보기', label: '실제 크기', keys: ['Ctrl+1'], run: () => this.view.setZoom(96 / 72), when: doc },
+      { id: 'fitWidth', group: '보기', label: '쪽 너비 맞춤', keys: ['Ctrl+2'], run: () => this.setFit('width'), when: doc },
+      { id: 'spread', group: '보기', label: '두 쪽씩 보기', keys: ['Ctrl+3'], run: () => { this.prefs.spread = !this.prefs.spread; this.savePrefs(); this.view.setSpread(this.prefs.spread); }, when: doc },
+      { id: 'night', group: '보기', label: '야간 보기', keys: ['Ctrl+Shift+Y'], run: () => { this.prefs.night = !this.prefs.night; this.savePrefs(); this.view.setNight(this.prefs.night); } },
+      { id: 'keys', group: '보기', label: '단축키 보기·바꾸기', keys: ['F1', '?'], run: () => this.showShortcuts() },
+      { id: 'nextPage', group: '이동', label: '다음 쪽', keys: ['N', 'ArrowRight'], run: () => this.goto(this.view.current + 1), when: () => noHScroll() && this.mode === 'view' },
+      { id: 'prevPage', group: '이동', label: '이전 쪽', keys: ['P', 'ArrowLeft'], run: () => this.goto(this.view.current - 1), when: () => noHScroll() && this.mode === 'view' },
+      { id: 'nextPage2', group: '이동', label: '다음 쪽 (편집 모드에서도)', keys: ['Alt+ArrowDown'], run: () => this.goto(this.view.current + 1), when: doc },
+      { id: 'prevPage2', group: '이동', label: '이전 쪽 (편집 모드에서도)', keys: ['Alt+ArrowUp'], run: () => this.goto(this.view.current - 1), when: doc },
+      { id: 'first', group: '이동', label: '첫 쪽', keys: ['Home', 'Ctrl+Home'], run: () => this.goto(0), when: doc },
+      { id: 'last', group: '이동', label: '마지막 쪽', keys: ['End', 'Ctrl+End'], run: () => this.goto(this.doc!.info.pageCount - 1), when: doc },
+      { id: 'goto', group: '이동', label: '쪽 번호로 이동', keys: ['Ctrl+G'], run: () => this.pageInput.focus(), when: doc, allowTyping: true },
+      { id: 'down', group: '이동', label: '조금 아래로', keys: ['J'], run: () => { this.view.el.scrollTop += 60; }, when: () => doc() && this.mode === 'view' },
+      { id: 'up', group: '이동', label: '조금 위로', keys: ['K'], run: () => { this.view.el.scrollTop -= 60; }, when: () => doc() && this.mode === 'view' },
+      { id: 'find', group: '찾기', label: '찾기', keys: ['Ctrl+F'], run: () => { this.searchInput.focus(); this.searchInput.select(); const s = this.view.selectedText(); if (s && s.length < 80) this.searchInput.value = s; }, when: doc, allowTyping: true },
+      { id: 'findNext', group: '찾기', label: '다음 찾기', keys: ['F3'], run: () => { this.hits.length ? this.gotoHit(this.hitIdx + 1) : this.searchInput.focus(); }, when: doc, allowTyping: true },
+      { id: 'findPrev', group: '찾기', label: '이전 찾기', keys: ['Shift+F3'], run: () => { if (this.hits.length) this.gotoHit(this.hitIdx - 1); }, when: doc, allowTyping: true },
+      { id: 'undo', group: '편집', label: '되돌리기', keys: ['Ctrl+Z'], run: ed(e => e.undo()), when: () => !!this.editor && doc() },
+      { id: 'redo', group: '편집', label: '다시 하기', keys: ['Ctrl+Y', 'Ctrl+Shift+Z'], run: ed(e => e.redo()), when: () => !!this.editor && doc() },
+      { id: 'copy', group: '편집', label: '고른 글자 복사', keys: ['Ctrl+C'], run: () => this.copy(), when: () => !!this.view.sel },
+      { id: 'selectAll', group: '편집', label: '이 쪽 글자 모두 선택', keys: ['Ctrl+A'], run: () => this.view.selectAllOnPage(this.view.current), when: () => doc() && this.mode === 'view' },
+      { id: 'rotL', group: '쪽', label: '왼쪽으로 회전 (현재·고른 쪽)', keys: ['Ctrl+['], run: ed(e => e.rotate(-1)), when: doc },
+      { id: 'rotR', group: '쪽', label: '오른쪽으로 회전 (현재·고른 쪽)', keys: ['Ctrl+]'], run: ed(e => e.rotate(1)), when: doc },
+      { id: 'rotAll', group: '쪽', label: '모든 쪽 오른쪽으로 회전', keys: ['Ctrl+Shift+]'], run: ed(e => e.rotate(1, 'all')), when: doc },
+      { id: 'blank', group: '쪽', label: '빈 쪽 넣기', keys: ['Ctrl+Shift+N'], run: ed(e => e.insertBlank()), when: doc },
+      { id: 'delPage', group: '쪽', label: '쪽 삭제 (현재·고른 쪽)', keys: ['Ctrl+Delete'], run: ed(e => e.deletePages()), when: doc },
+      { id: 'merge', group: '쪽', label: '다른 PDF 넣기 (합치기)', keys: ['Ctrl+Shift+O'], run: ed(e => e.mergePdf()), when: doc },
+      { id: 'extract', group: '쪽', label: '쪽 뽑아내기', keys: ['Ctrl+Shift+X'], run: ed(e => e.extract()), when: doc },
+    );
+    const tool = (id: string, label: string, key: string, group = '편집 도구') => ({ id: 'tool.' + id, group, label, keys: key ? [key] : [], run: () => this.editor?.setTool(id as any), when: edit });
+    S.add(
+      tool('select', '선택', 'V'), tool('editText', '글자 고치기', 'E'), tool('addText', '글자 추가', 'T'), tool('textbox', '글상자', 'G'),
+      tool('image', '이미지', 'I'), tool('table', '표', 'B'), tool('rect', '사각형', 'R'), tool('ellipse', '원', 'O'), tool('line', '선', 'L'),
+      tool('free', '자유선', 'F'), tool('redact', '영역 삭제', 'X'),
+      tool('aselect', '주석 선택', 'A', '주석 도구'), tool('highlight', '형광펜', 'H', '주석 도구'), tool('underline', '밑줄', 'U', '주석 도구'),
+      tool('strike', '취소선', 'S', '주석 도구'), tool('note', '메모', 'N', '주석 도구'), tool('pen', '펜', 'D', '주석 도구'),
+      tool('arect', '사각 표시', 'Shift+R', '주석 도구'), tool('aellipse', '원 표시', 'Shift+O', '주석 도구'),
+    );
     document.addEventListener('keydown', e => {
+      if (document.querySelector('.modal-back')) return;
       const t = e.target as HTMLElement;
       const typing = t.matches('input, textarea, select, [contenteditable]');
-      const mod = e.ctrlKey || e.metaKey, k = e.key.toLowerCase();
-      if (document.querySelector('.modal-back')) return;
-      if (mod && k === 'o') { e.preventDefault(); this.pickAndOpen(); return; }
-      if (mod && k === 's') { e.preventDefault(); this.save(e.shiftKey); return; }
-      if (mod && k === 'p') { e.preventDefault(); this.print(); return; }
-      if (mod && k === 'w') { e.preventDefault(); this.closeDoc(); return; }
-      if (mod && e.key === 'Tab') { e.preventDefault(); this.cycleTab(e.shiftKey ? -1 : 1); return; }
-      if (mod && (e.key === 'PageDown' || e.key === 'PageUp')) { e.preventDefault(); this.cycleTab(e.key === 'PageDown' ? 1 : -1); return; }
-      if (mod && k === 'e') { e.preventDefault(); this.setMode(this.mode === 'edit' ? 'view' : 'edit'); return; }
-      if (mod && k === 'f') { e.preventDefault(); this.searchInput.focus(); this.searchInput.select(); const s = this.view.selectedText(); if (s && s.length < 80) this.searchInput.value = s; return; }
-      if (mod && k === 'g') { e.preventDefault(); this.pageInput.focus(); return; }
-      if (e.key === 'F3') { e.preventDefault(); if (this.hits.length) this.gotoHit(this.hitIdx + (e.shiftKey ? -1 : 1)); else this.searchInput.focus(); return; }
-      if (e.key === 'F11') { e.preventDefault(); this.platform.toggleFullscreen(); return; }
-      if (e.key === 'F12') { e.preventDefault(); this.toggleSidebar(); return; }
-      if (e.key === 'F1') { e.preventDefault(); this.shortcuts(); return; }
-      if (typing) return;
-      if (this.mode === 'edit' && this.editor?.key(e)) return;
-      if (mod && (k === '=' || k === '+')) { e.preventDefault(); this.zoomStep(1); return; }
-      if (mod && k === '-') { e.preventDefault(); this.zoomStep(-1); return; }
-      if (mod && k === '0') { e.preventDefault(); this.setFit('page'); return; }
-      if (mod && k === '1') { e.preventDefault(); this.view.setZoom(96 / 72); return; }
-      if (mod && k === '2') { e.preventDefault(); this.setFit('width'); return; }
-      if (mod && k === 'c') { if (this.view.sel) { e.preventDefault(); this.copy(); } return; }
-      if (mod && k === 'a') { e.preventDefault(); this.view.selectAllOnPage(this.view.current); return; }
-      if (mod) return;
-      if (!this.doc) return;
-      if (k === 'n' || (e.key === 'ArrowRight' && this.view.el.scrollWidth <= this.view.el.clientWidth)) { e.preventDefault(); this.goto(this.view.current + 1); }
-      else if (k === 'p' || (e.key === 'ArrowLeft' && this.view.el.scrollWidth <= this.view.el.clientWidth)) { e.preventDefault(); this.goto(this.view.current - 1); }
-      else if (e.key === 'Home') { e.preventDefault(); this.goto(0); }
-      else if (e.key === 'End') { e.preventDefault(); this.goto(this.doc.info.pageCount - 1); }
-      else if (k === 'j') this.view.el.scrollTop += 60;
-      else if (k === 'k') this.view.el.scrollTop -= 60;
-      else if (e.key === 'Escape') { this.view.clearSelection(); this.clearSearch(); }
-      else if (e.key === '?') this.shortcuts();
+      if (!typing && this.mode === 'edit' && this.editor?.key(e)) return;
+      if (S.handle(e, typing)) return;
+      if (!typing && e.key === 'Escape') { this.view.clearSelection(); this.clearSearch(); }
     });
   }
   private bindDrop() {
@@ -568,9 +701,10 @@ export class App {
     window.addEventListener('dragenter', e => { if (!isFiles(e)) return; depth++; zone.hidden = false; });
     window.addEventListener('dragleave', e => { if (!isFiles(e)) return; if (--depth <= 0) { depth = 0; zone.hidden = true; } });
     window.addEventListener('dragover', e => { if (isFiles(e)) e.preventDefault(); });
+    window.addEventListener('airpdf-drop-done', () => { depth = 0; zone.hidden = true; document.body.classList.remove('drop-in-thumbs'); });
     window.addEventListener('drop', async e => {
       if (!isFiles(e)) return;
-      e.preventDefault(); depth = 0; zone.hidden = true;
+      e.preventDefault(); depth = 0; zone.hidden = true; document.body.classList.remove('drop-in-thumbs');
       const files = [...e.dataTransfer!.files];
       const pdfs = files.filter(f => /\.pdf$/i.test(f.name) || f.type === 'application/pdf');
       const imgs = files.filter(f => f.type.startsWith('image/'));
