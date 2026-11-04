@@ -81,6 +81,12 @@ export class App {
     };
     this.bindKeys();
     this.bindDrop();
+    // 엔진이 메모리를 아끼려고 쪽을 닫으면, 그 쪽에 대해 기억해 둔 객체 번호를 버린다
+    engine.onEvent(e => {
+      if (e.event !== 'evict') return;
+      if (this.doc?.id === e.docId) this.editor?.dropPage(e.key);
+      else { const t = this.tabs.find(x => x.id === e.docId); const st: any = t?.editorState; if (st) { st.runs?.delete(e.key); st.objs?.delete(e.key); st.annots?.delete(e.key); } }
+    });
     platform.onExternalOpen(b => this.handleBatch(b));
     platform.onCloseRequest(async () => {
       const dirty = this.tabs.filter(t => t.dirty);
@@ -308,7 +314,8 @@ export class App {
   /** 탭 바꾸기: 화면 위치·배율·편집 기록은 탭마다 따로 기억한다 */
   async activate(tab: DocState) {
     if (this.doc === tab) return;
-    if (this.doc) this.stash(this.doc);
+    if (this.doc) await this.stash(this.doc); // 입력 중이던 글자를 먼저 그 문서에 넣고 바꾼다
+    if (this.doc === tab) return;
     this.forms.reset();
     this.doc = tab;
     this.root.classList.remove('no-doc');
@@ -333,8 +340,8 @@ export class App {
     this.updateTitle(); this.updateStatus(); this.onPage(this.view.current);
     this.view.el.focus();
   }
-  private stash(tab: DocState) {
-    this.editor?.commitPending();
+  private async stash(tab: DocState) {
+    await this.editor?.commitPending();
     tab.view = { zoom: this.view.zoom, fit: this.view.fit, top: this.view.el.scrollTop, left: this.view.el.scrollLeft, current: this.view.current };
     if (this.editor) tab.editorState = this.editor.saveState();
   }
@@ -345,7 +352,7 @@ export class App {
     this.tabs.splice(i, 1);
     this.engine.call('close', [tab.id]);
     if (tab === this.doc) {
-      this.editor?.commitPending();
+      await this.editor?.commitPending();
       this.doc = null;
       const next = this.tabs[i] || this.tabs[i - 1];
       if (next) await this.activate(next);
@@ -416,6 +423,7 @@ export class App {
   /** 쪽 구성이 바뀐 뒤(삭제·이동·합치기) 다시 읽기 */
   async reloadPages(keepIndex?: number) {
     if (!this.doc) return;
+    this.editor?.dropCaches(); // 쪽 구조가 바뀌면 쪽마다 기억한 객체 번호는 쓸 수 없다
     const info = await this.engine.call<DocInfo>('info', [this.doc.id]);
     this.doc.info = info;
     const cur = keepIndex ?? this.view.current;
@@ -707,6 +715,10 @@ export class App {
       { id: 'redo', group: '편집', label: '다시 하기', keys: ['Ctrl+Y', 'Ctrl+Shift+Z'], run: ed(e => e.redo()), when: () => !!this.editor && doc() },
       { id: 'copy', group: '편집', label: '고른 글자 복사', keys: ['Ctrl+C'], run: () => this.copy(), when: () => !!this.view.sel },
       { id: 'selectAll', group: '편집', label: '이 쪽 글자 모두 선택', keys: ['Ctrl+A'], run: () => this.view.selectAllOnPage(this.view.current), when: () => doc() && this.mode === 'view' },
+      { id: 'arrangeFront', group: '편집', label: '맨 앞으로 가져오기', keys: ['Ctrl+Alt+Home'], run: ed(e => e.arrange('front')), when: edit },
+      { id: 'arrangeForward', group: '편집', label: '앞으로 가져오기', keys: ['Ctrl+Alt+]'], run: ed(e => e.arrange('forward')), when: edit },
+      { id: 'arrangeBackward', group: '편집', label: '뒤로 보내기', keys: ['Ctrl+Alt+['], run: ed(e => e.arrange('backward')), when: edit },
+      { id: 'arrangeBack', group: '편집', label: '맨 뒤로 보내기', keys: ['Ctrl+Alt+End'], run: ed(e => e.arrange('back')), when: edit },
       { id: 'rotL', group: '쪽', label: '왼쪽으로 회전 (현재·고른 쪽)', keys: ['Ctrl+['], run: ed(e => e.rotate(-1)), when: doc },
       { id: 'rotR', group: '쪽', label: '오른쪽으로 회전 (현재·고른 쪽)', keys: ['Ctrl+]'], run: ed(e => e.rotate(1)), when: doc },
       { id: 'rotAll', group: '쪽', label: '모든 쪽 오른쪽으로 회전', keys: ['Ctrl+Shift+]'], run: ed(e => e.rotate(1, 'all')), when: doc },
@@ -726,6 +738,7 @@ export class App {
     );
     document.addEventListener('keydown', e => {
       if (document.querySelector('.modal-back')) return;
+      if (document.querySelector('.busy')) { e.preventDefault(); return; } // 오래 걸리는 작업 중에는 단축키를 막는다
       const t = e.target as HTMLElement;
       const typing = t.matches('input, textarea, select, [contenteditable]');
       if (!typing && this.mode === 'edit' && this.editor?.key(e)) return;

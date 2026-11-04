@@ -56,14 +56,17 @@ export class Editor {
   private runs = new Map<number, TextRun[] | Promise<TextRun[]>>();
   private objs = new Map<number, PageObjInfo[] | Promise<PageObjInfo[]>>();
   private annots = new Map<number, AnnotInfo[] | Promise<AnnotInfo[]>>();
-  private sel: Sel | null = null;
+  private _sel: Sel | null = null;
+  /** 고른 것. 새로 정하면 함께 고른 것(more)은 비운다 (여러 개는 sel을 정한 뒤 more를 채운다) */
+  private get sel(): Sel | null { return this._sel; }
+  private set sel(v: Sel | null) { this._sel = v; this.more = []; }
   /** Shift+클릭·끌어 고르기로 함께 고른 것 (같은 쪽, sel 제외) */
   private more: Sel[] = [];
   /** 도구 단추를 두 번 누르면 그 도구를 계속 쓴다 (아니면 하나 넣고 선택 도구로 돌아감) */
   private toolLock = false;
   private hover: { page: number; rect: Rect } | null = null;
   private drag: any = null;
-  private editing: { ta: HTMLTextAreaElement; commit: (cancel?: boolean) => Promise<void>; kind?: 'run' | 'new' | 'box'; restyle?: () => void } | null = null;
+  private editing: { ta: HTMLTextAreaElement; commit: (cancel?: boolean) => Promise<void>; kind?: 'run' | 'new' | 'box'; restyle?: () => void; at?: { page: number; x: number; y: number } } | null = null;
   private tableEd: HTMLElement | null = null;
   private toolBar!: HTMLElement; private propBar!: HTMLElement; private undoBtn!: HTMLButtonElement; private redoBtn!: HTMLButtonElement; private countEl!: HTMLElement;
   private annotPanel: HTMLElement | null = null;
@@ -89,7 +92,7 @@ export class Editor {
     };
     this.V.decorate = pe => this.paint(pe);
     for (const pe of this.V.live.values()) { pe.links.innerHTML = ''; this.paint(pe); }
-    const prevZoom = this.V.onZoom;
+    const prevZoom = this.prevZoom = this.V.onZoom;
     this.V.onZoom = z => { prevZoom(z); if (this.editing) this.editing.commit(); this.layoutTableEditor(); };
     this.app.sidebar.onMovePage = (key, to) => this.movePage(key, to);
     this.app.sidebar.onThumbMenu = (e, i) => this.thumbMenu(e, i);
@@ -98,8 +101,10 @@ export class Editor {
     this.setTab(this.tab);
     this.refreshAnnotList();
   }
+  private prevZoom: ((z: number) => void) | null = null;
   deactivate() {
     this.commitPending();
+    if (this.prevZoom) { this.V.onZoom = this.prevZoom; this.prevZoom = null; }
     this.closeTableEditor();
     this.sel = null; this.hover = null;
     for (const pe of this.V.live.values()) pe.edit.innerHTML = '';
@@ -110,7 +115,19 @@ export class Editor {
     this.updateUndo(); this.refreshAnnotList();
     for (const pe of this.V.live.values()) this.paint(pe);
   }
-  commitPending() { if (this.editing) this.editing.commit(); }
+  /** 입력 중인 글자를 확정한다 (끝날 때까지 기다릴 수 있다) */
+  commitPending(): Promise<void> { return this.editing ? this.editing.commit() : Promise.resolve(); }
+  /** 엔진이 그 쪽을 닫았다: 기억해 둔 객체 번호를 버린다 */
+  dropPage(key: number) {
+    this.runs.delete(key); this.objs.delete(key); this.annots.delete(key);
+    if (this.sel?.key === key) { const p = this.sel.page; this.sel = null; this.paintPage(p); this.renderProps(); }
+    if (this.hover && this.V.pages[this.hover.page]?.key === key) this.hover = null;
+  }
+  /** 쪽 구조가 바뀌었다 (삭제·되살리기·옮기기·회전): 쪽마다 기억한 것을 모두 버린다 */
+  dropCaches() {
+    this.runs.clear(); this.objs.clear(); this.annots.clear();
+    this.sel = null; this.hover = null;
+  }
   /** 탭마다 따로 가지는 편집 상태 */
   saveState() { return { undoS: this.undoS, redoS: this.redoS, runs: this.runs, objs: this.objs, annots: this.annots }; }
   loadState(st?: any) {
@@ -195,7 +212,7 @@ export class Editor {
     const P = this.propBar; P.innerHTML = '';
     const t = this.tool, s = this.sel;
     const obj = s?.kind === 'obj' ? s.obj : null;
-    const color = (title: string, cur: string, set: (c: string) => void, mark: 'text' | 'line' | 'fill' = 'line', none?: string) => colorButton({ title, value: cur, onPick: set, mark, none });
+    const color = (title: string, cur: string, set: (c: string) => void, mark: 'text' | 'line' | 'fill' = 'line', none?: string, label?: string) => colorButton({ title, value: cur, onPick: set, mark, none, label: label ?? (mark === 'fill' ? '채우기' : mark === 'line' ? '선' : undefined) });
     const num = (label: string, v: number, min: number, max: number, step: number, set: (n: number) => void, unit = 'pt') => {
       const i = h('input', { type: 'number', class: 'num', value: String(Math.round(v * 10) / 10), min: String(min), max: String(max), step: String(step), 'aria-label': label });
       i.addEventListener('change', () => { const n = Math.max(min, Math.min(max, parseFloat(i.value) || v)); set(n); });
@@ -208,6 +225,7 @@ export class Editor {
       P.append(lbl(`${all.length}개 고름`));
       if (all.every(x => x.kind === 'run')) P.append(color('글자 색', '', c => this.styleMany({ color: c }), 'text'), boldBtn(false, () => this.styleMany({ bold: true })));
       else if (all.every(x => x.kind === 'obj' && ['shape', 'free', 'path'].includes(x.obj.type))) P.append(color('선 색', '', c => this.setShape({ stroke: c })), num('굵기', this.props.width, 0.25, 30, 0.25, n => this.setShape({ width: n })));
+      P.append(h('button', { class: 'btn sm', type: 'button', title: '겹친 순서', onclick: (e: MouseEvent) => this.arrangeMenu(e) }, icon('layers'), '순서 ▾'));
       P.append(h('button', { class: 'btn sm danger-ghost', type: 'button', onclick: () => this.deleteSel() }, icon('trash'), '모두 지우기'));
       return;
     }
@@ -226,7 +244,7 @@ export class Editor {
       const alignBtn = (a: 'left' | 'center' | 'right', ic: string) => h('button', { class: 'tg' + (m.align === a ? ' on' : ''), type: 'button', title: { left: '왼쪽 정렬', center: '가운데 정렬', right: '오른쪽 정렬' }[a], 'aria-pressed': String(m.align === a), onclick: () => this.setBox({ align: a }) }, ic);
       P.append(this.fontSelect(m.font || 'noto-sans', f => this.setBox({ font: f })), color('글자 색', m.color, c => this.setBox({ color: c }), 'text'), num('크기', m.size, 4, 120, 0.5, n => this.setBox({ size: n })), boldBtn(!!m.bold, b => this.setBox({ bold: b })),
         h('div', { class: 'seg' }, alignBtn('left', '≡'), alignBtn('center', '☰'), alignBtn('right', '≡')),
-        color('테두리 색', m.border || '', c => this.setBox({ border: c }), 'line', '테두리 없음'), color('배경색', m.fill || '', c => this.setBox({ fill: c }), 'fill', '배경 없음'));
+        color('테두리 색', m.border || '', c => this.setBox({ border: c }), 'line', '테두리 없음', '테두리'), color('배경색', m.fill || '', c => this.setBox({ fill: c }), 'fill', '배경 없음', '배경'));
     } else if (obj && (obj.type === 'shape' || obj.type === 'free' || obj.type === 'path')) {
       const st = obj.meta || {};
       P.append(lbl(obj.type === 'free' ? '자유선' : '도형'), color('선 색', st.stroke || '', c => this.setShape({ stroke: c }), 'line', obj.type === 'shape' && st.kind !== 'line' ? '선 없음' : undefined),
@@ -258,6 +276,7 @@ export class Editor {
       cb.addEventListener('change', () => { this.props.keepRatio = (cb as HTMLInputElement).checked; });
       P.append(lbl('이미지'), h('label', { class: 'chk', title: '모서리 손잡이로 크기를 바꿀 때 가로세로 비율 유지 (Shift를 누르면 반대로)' }, cb, ' 비율 유지'));
     }
+    if (s && s.kind !== 'annot') P.append(h('button', { class: 'btn sm', type: 'button', title: '겹친 순서: 앞으로 가져오기·뒤로 보내기', onclick: (e: MouseEvent) => this.arrangeMenu(e) }, icon('layers'), '순서 ▾'));
     if (s) P.append(h('button', { class: 'btn sm danger-ghost', type: 'button', onclick: () => this.deleteSel() }, icon('trash'), '지우기'));
   }
   /** 글꼴 고르기 (앱 글꼴 + 컴퓨터 글꼴) */
@@ -294,8 +313,14 @@ export class Editor {
     const map: any = { font: 'font', color: 'textColor', size: 'fontSize', bold: 'bold' };
     (this.props as any)[map[field]] = v;
     if (this.editing?.kind === 'new') { this.editing.restyle?.(); this.renderProps(); this.editing.ta.focus(); return; }
-    if (this.editing) await this.editing.commit();
-    const s = this.sel;
+    let s = this.sel;
+    if (this.editing?.kind === 'run' && this.editing.at) {
+      const at = this.editing.at;
+      await this.editing.commit();
+      const runs = await this.getRuns(at.page);
+      const run = runs.find(r => inRect(r.rect, at.x, at.y, 2));
+      s = run ? { kind: 'run', page: at.page, key: this.V.pages[at.page].key, run } : null;
+    } else if (this.editing) await this.editing.commit();
     if (s?.kind === 'run') await this.styleRun(s.page, s.key, s.run, field, v);
     this.renderProps();
   }
@@ -304,8 +329,9 @@ export class Editor {
     try {
       if (field === 'color' || field === 'bold') {
         const st: any = field === 'color' ? { color: v } : { bold: v };
-        const res = await this.E.call<{ before: any[] }>('setTextStyle', [id, key, run.objs, st]);
-        this.push({ label: field === 'color' ? '글자 색' : '굵게', keys: [key], undo: () => this.E.call('restoreTextStyle', [id, key, res.before]), redo: () => this.E.call('setTextStyle', [id, key, run.objs, st]) });
+        const res = await this.E.call<{ before: any[]; also?: number[] }>('setTextStyle', [id, key, run.objs, st]);
+        this.push({ label: field === 'color' ? '글자 색' : '굵게', keys: [key, ...(res.also || [])], undo: () => this.E.call('restoreTextStyle', [id, key, res.before]), redo: () => this.E.call('setTextStyle', [id, key, run.objs, st]) });
+        for (const k of res.also || []) this.changed(k);
         this.changed(key);
         await this.reselectRun(page, run.objs[0]);
       } else if (field === 'size') {
@@ -344,8 +370,9 @@ export class Editor {
     const s = this.sel; if (!s) return;
     const id = this.doc.id, key = s.key, objs = this.selObjs(), keep = this.allSel();
     try {
-      const res = await this.E.call<{ before: any[] }>('setTextStyle', [id, key, objs, st]);
-      this.push({ label: st.color ? '글자 색' : '굵게', keys: [key], undo: () => this.E.call('restoreTextStyle', [id, key, res.before]), redo: () => this.E.call('setTextStyle', [id, key, objs, st]) });
+      const res = await this.E.call<{ before: any[]; also?: number[] }>('setTextStyle', [id, key, objs, st]);
+      this.push({ label: st.color ? '글자 색' : '굵게', keys: [key, ...(res.also || [])], undo: () => this.E.call('restoreTextStyle', [id, key, res.before]), redo: () => this.E.call('setTextStyle', [id, key, objs, st]) });
+      for (const k of res.also || []) this.changed(k);
       this.changed(key);
       const runs = await this.getRuns(s.page);
       const all = keep.map(k => k.kind === 'run' ? runs.find(r => r.objs.includes(k.run.objs[0])) : null).filter(Boolean).map(run => ({ kind: 'run', page: s.page, key, run }) as Sel);
@@ -511,7 +538,19 @@ export class Editor {
 
   /* ───────────── 마우스 ───────────── */
   private hitRun(page: number, x: number, y: number) { const runs = this.now(this.runs, page); return runs?.filter(r => !r.invisible).reverse().find(r => inRect(r.rect, x, y, 1.5)) || null; }
-  private hitObj(page: number, x: number, y: number) { const objs = this.now(this.objs, page); return objs?.slice().reverse().find(o => inRect(o.rect, x, y, 2)) || null; }
+  /** 눌러서 고를 객체: 흰색으로만 칠한 상자(표 칸 바탕 등)는 건너뛰고, 선만 있는 원본 도형은 선 가까이를 눌러야 잡힌다 */
+  private hitObj(page: number, x: number, y: number) {
+    const objs = this.now(this.objs, page); if (!objs) return null;
+    const tol = Math.max(2, 5 / this.V.zoom);
+    return objs.slice().reverse().find(o => {
+      if (!inRect(o.rect, x, y, 2)) return false;
+      if (!o.vis) return true;
+      if (o.vis.ghost) return false;
+      if (o.vis.fill) return true;
+      const r = o.rect; // 선만 있는 것: 가장자리 근처만
+      return o.rect.w < tol * 2 || o.rect.h < tol * 2 || x < r.x + tol || x > r.x + r.w - tol || y < r.y + tol || y > r.y + r.h - tol;
+    }) || null;
+  }
   private hitAnnot(page: number, x: number, y: number) { const a = this.now(this.annots, page); return a?.slice().reverse().find(o => inRect(o.rect, x, y, 3)) || null; }
 
   private hoverAt(page: number, x: number, y: number) {
@@ -705,7 +744,7 @@ export class Editor {
     const inside = (q: Rect) => q.x >= r.x && q.y >= r.y && q.x + q.w <= r.x + r.w && q.y + q.h <= r.y + r.h;
     const got: Sel[] = [
       ...runs.filter(x => !x.invisible && inside(x.rect)).map(run => ({ kind: 'run', page, key, run }) as Sel),
-      ...objs.filter(o => inside(o.rect)).map(obj => ({ kind: 'obj', page, key, obj }) as Sel)];
+      ...objs.filter(o => inside(o.rect) && !o.vis?.ghost).map(obj => ({ kind: 'obj', page, key, obj }) as Sel)];
     const all = d.add && this.sel?.page === page ? [...this.allSel()] : [];
     for (const g of got) if (!all.some(a => this.sameSel(a, g))) all.push(g);
     this.sel = all[0] || null; this.more = all.slice(1);
@@ -739,13 +778,15 @@ export class Editor {
   async undo() { await this.step(this.undoS, this.redoS, 'undo'); }
   async redo() { await this.step(this.redoS, this.undoS, 'redo'); }
   private async step(from: Entry[], to: Entry[], dir: 'undo' | 'redo') {
-    this.commitPending();
+    await this.commitPending();
     const e = from.pop(); if (!e) return;
-    const ok = await e[dir]();
+    let ok: boolean | void;
+    try { ok = await e[dir](); }
+    catch (err: any) { from.push(e); toast(`“${e.label}”을 ${dir === 'undo' ? '되돌리지' : '다시 하지'} 못했습니다: ${err.message}`); return; }
     if (ok === false) toast(`“${e.label}”은 ${dir === 'undo' ? '되돌릴' : '다시 할'} 수 없습니다 (그 쪽이 다시 만들어졌습니다).`);
     to.push(e);
     this.sel = null;
-    if (e.structural) await this.app.reloadPages();
+    if (e.structural) { this.dropCaches(); await this.app.reloadPages(); }
     for (const k of e.keys) this.changed(k);
     this.updateUndo(); this.renderProps(); this.refreshAnnotList();
     toast(`${dir === 'undo' ? '되돌림' : '다시 함'}: ${e.label}`, 1400);
@@ -804,7 +845,7 @@ export class Editor {
       } catch (e: any) { toast('글자를 고치지 못했습니다: ' + e.message); }
     };
     this.bindEditorKeys(ta, commit);
-    this.editing = { ta, commit, kind: 'run' };
+    this.editing = { ta, commit, kind: 'run', at: { page, x: run.rect.x + Math.min(4, run.rect.w / 2), y: run.rect.y + run.rect.h / 2 } };
   }
   private openNewTextEditor(page: number, x: number, y: number) {
     this.commitPending();
@@ -903,6 +944,30 @@ export class Editor {
     const keep = this.sel, keepMore = this.more;
     this.changed(key);
     this.sel = keep; this.more = keepMore; this.paintPage(s.page);
+  }
+  /** 겹친 순서 바꾸기 (고른 것 모두) */
+  async arrange(how: 'front' | 'back' | 'forward' | 'backward') {
+    const s = this.sel; if (!s || s.kind === 'annot') return;
+    const id = this.doc.id, key = s.key, objs = this.selObjs(), keepSel = this.sel, keepMore = this.more;
+    try {
+      const r = await this.E.call<{ before: { h: number; idx: number }[]; also: number[]; changed: boolean }>('reorder', [id, key, objs, how]);
+      for (const k of r.also) this.changed(k);
+      if (!r.changed) { toast(how === 'forward' ? '이미 겹친 객체 중 맨 앞에 있습니다.' : how === 'backward' ? '이미 겹친 객체 중 맨 뒤에 있습니다.' : '순서가 바뀌지 않았습니다.'); return; }
+      const label = { front: '맨 앞으로 가져오기', back: '맨 뒤로 보내기', forward: '앞으로 가져오기', backward: '뒤로 보내기' }[how];
+      this.push({ label, keys: [key], undo: () => this.E.call('restoreOrder', [id, key, r.before]), redo: () => this.E.call('reorder', [id, key, objs, how]) });
+      this.changed(key);
+      this.sel = keepSel; this.more = keepMore; this.paintPage(s.page); this.renderProps();
+    } catch (e: any) { toast('순서를 바꾸지 못했습니다: ' + e.message); }
+  }
+  private arrangeMenu(ev: MouseEvent) {
+    const r = (ev.currentTarget as HTMLElement).getBoundingClientRect();
+    const k = (id: string) => this.app.shortcuts.label(id);
+    menu({ x: r.left, y: r.bottom + 4 }, [
+      { label: '맨 앞으로 가져오기', icon: 'front', hint: k('arrangeFront'), action: () => this.arrange('front') },
+      { label: '앞으로 가져오기', icon: 'up', hint: k('arrangeForward'), action: () => this.arrange('forward') },
+      { label: '뒤로 보내기', icon: 'down', hint: k('arrangeBackward'), action: () => this.arrange('backward') },
+      { label: '맨 뒤로 보내기', icon: 'back', hint: k('arrangeBack'), action: () => this.arrange('back') },
+    ]);
   }
   async deleteSel() {
     const s = this.sel; if (!s) return;
@@ -1088,7 +1153,7 @@ export class Editor {
   private async editAnnotContents(a: AnnotInfo) {
     const v = await this.noteDialog(`${a.kind} 내용`, a.contents);
     if (v === null || v === a.contents) return;
-    const key = this.V.pages[a.page].key, id = this.doc.id, old = a.contents;
+    const key = this.sel?.kind === 'annot' && this.sel.annot.id === a.id ? this.sel.key : this.V.pages[a.page].key, id = this.doc.id, old = a.contents;
     await this.E.call('updateAnnot', [id, key, a.id, { contents: v }]);
     this.push({ label: '주석 내용 고치기', keys: [key], undo: () => this.E.call('updateAnnot', [id, key, a.id, { contents: old }]), redo: () => this.E.call('updateAnnot', [id, key, a.id, { contents: v }]) });
     this.changed(key); this.refreshAnnotList();
@@ -1263,6 +1328,7 @@ export class Editor {
     const which = r.data as string;
     const id = this.doc.id;
     const pages = which === 'cur' ? [this.V.current] : this.V.pages.map((_, i) => i);
+    const keysAt = this.V.pages.map(p => p.key); // 도중에 다른 탭으로 가도 이 문서의 쪽에 넣는다
     const b = busy('글자 인식 엔진을 준비하는 중…');
     let cancelled = false;
     const cancelBtn = h('button', { class: 'btn sm', type: 'button', onclick: () => { cancelled = true; } }, '그만');
@@ -1280,7 +1346,7 @@ export class Editor {
         const bmp: ImageBitmap = res.bitmap || await createImageBitmap(new ImageData(res.data, res.width, res.height));
         const found = await recognize(bmp, m => b.set(`${i + 1}쪽 ${m}`));
         bmp.close?.();
-        const key = this.V.pages[i].key;
+        const key = keysAt[i];
         const ch = await this.E.call<ObjChange>('addOcrLayer', [id, key, found.map(w => ({ text: w.text, x: w.x / scale, y: w.y / scale, w: w.w / scale, h: w.h / scale }))]);
         if (ch.added.length) { changes.push(ch); this.changed(key); }
         words += found.length; done++;
@@ -1357,7 +1423,12 @@ export class Editor {
     this.paintPage(page); this.renderProps();
     menu({ x: e.clientX, y: e.clientY }, [
       ...(run ? [{ label: '이 글자 고치기', icon: 'editText' as IconName, hint: 'Enter', action: () => this.openRunEditor(page, run) }] : []),
-      ...(run || obj ? [{ label: '지우기', icon: 'trash' as IconName, hint: 'Delete', action: () => this.deleteSel() }, '-' as const] : []),
+      ...(run || obj ? [
+        { label: '맨 앞으로 가져오기', icon: 'front' as IconName, action: () => this.arrange('front') },
+        { label: '앞으로 가져오기', icon: 'up' as IconName, action: () => this.arrange('forward') },
+        { label: '뒤로 보내기', icon: 'down' as IconName, action: () => this.arrange('backward') },
+        { label: '맨 뒤로 보내기', icon: 'back' as IconName, action: () => this.arrange('back') }, '-' as const,
+        { label: '지우기', icon: 'trash' as IconName, hint: 'Delete', action: () => this.deleteSel() }, '-' as const] : []),
       { label: '여기에 글자 추가', icon: 'addText', action: () => this.openNewTextEditor(page, x, y - this.props.fontSize * 0.7) },
       { label: '여기에 메모 붙이기', icon: 'note', action: () => this.placeNote(page, x, y) },
       { label: '이미지 넣기…', icon: 'image', action: () => this.pickImage() },

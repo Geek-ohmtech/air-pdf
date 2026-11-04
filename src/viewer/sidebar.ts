@@ -56,8 +56,10 @@ export class Sidebar {
   }
 
   /* ───────────── 쪽 그림 ───────────── */
+  private anchor = -1;
   buildThumbs() {
     this.thumbObs.disconnect(); this.thumbList.innerHTML = ''; this.thumbDone.clear();
+    this.anchor = -1;
     const W = 118;
     this.view.pages.forEach((p, i) => {
       const hgt = Math.round(W * p.h / p.w);
@@ -114,7 +116,6 @@ export class Sidebar {
   clearDropMarks() { this.thumbList.querySelectorAll('.drop-before, .drop-after').forEach(x => x.classList.remove('drop-before', 'drop-after')); }
 
   private bindThumbs() {
-    let anchor = -1;
     // 순서 바꾸기는 마우스로 직접 처리한다 (설치판 Windows에서는 HTML 끌어 놓기가 막혀 있어서)
     let pd: { key: number; x: number; y: number; el: HTMLElement; started: boolean; ghost?: HTMLElement; scroll?: number } | null = null;
     let skipClick = false;
@@ -168,9 +169,9 @@ export class Sidebar {
       if (skipClick) return;
       const it = (e.target as HTMLElement).closest('.thumb') as HTMLElement | null; if (!it) return;
       const i = +it.dataset.i!, key = +it.dataset.key!;
-      if (this.editable && (e.ctrlKey || e.metaKey)) { this.selected.has(key) ? this.selected.delete(key) : this.selected.add(key); anchor = i; }
-      else if (this.editable && e.shiftKey && anchor >= 0) { this.selected.clear(); for (let k = Math.min(anchor, i); k <= Math.max(anchor, i); k++) this.selected.add(this.view.pages[k].key); }
-      else { this.selected.clear(); this.selected.add(key); anchor = i; this.view.scrollToPage(i); if (innerWidth < 860) this.el.hidden = true; }
+      if (this.editable && (e.ctrlKey || e.metaKey)) { this.selected.has(key) ? this.selected.delete(key) : this.selected.add(key); this.anchor = i; }
+      else if (this.editable && e.shiftKey && this.anchor >= 0) { const a = Math.min(this.anchor, this.view.pages.length - 1); this.selected.clear(); for (let k = Math.min(a, i); k <= Math.max(a, i); k++) this.selected.add(this.view.pages[k].key); }
+      else { this.selected.clear(); this.selected.add(key); this.anchor = i; this.view.scrollToPage(i); if (innerWidth < 860) this.el.hidden = true; }
       this.paintPicked();
       this.thumbList.focus({ preventScroll: true });
     });
@@ -183,7 +184,7 @@ export class Sidebar {
         e.preventDefault(); e.stopPropagation();
         const i = Math.max(0, Math.min(this.view.pages.length - 1, this.view.current + (e.key === 'ArrowDown' ? 1 : -1)));
         if (!e.shiftKey) this.selected.clear();
-        this.selected.add(this.view.pages[i].key); anchor = i;
+        this.selected.add(this.view.pages[i].key); this.anchor = i;
         this.view.scrollToPage(i); this.paintPicked();
       }
     });

@@ -140,8 +140,8 @@ kbd { font: 11px var(--mono); padding: 1px 5px; border: 1px solid var(--line); b
 .color-btn[aria-expanded="true"] { border-color: var(--edit); }
 .cb-face { display: inline-flex; flex-direction: column; align-items: center; justify-content: center; width: 20px; gap: 1px; }
 .cb-a { font-weight: 700; font-size: 13px; line-height: 14px; }
-.cb-line { width: 14px; height: 10px; border: 2px solid var(--ink); border-radius: 2px; opacity: .75; }
-.cb-fill { width: 14px; height: 10px; border-radius: 2px; background: linear-gradient(135deg, var(--panel-3), var(--line)); }
+.cb-ico { display: inline-flex; line-height: 0; color: var(--ink); }
+.cb-label { font-size: 12px; margin-left: 3px; color: var(--ink); white-space: nowrap; }
 .cb-bar { width: 18px; height: 4px; border-radius: 1px; box-shadow: inset 0 0 0 1px rgba(0,0,0,.18); }
 .cb-bar.none { background: linear-gradient(135deg, transparent 42%, #d0342c 42%, #d0342c 58%, transparent 58%) !important; }
 .cb-caret { font-size: 9px; color: var(--muted); }

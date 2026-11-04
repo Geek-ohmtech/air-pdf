@@ -28,6 +28,7 @@ const ANNOT_NAMES: Record<number, string> = {
 
 interface PageCtx {
   key: number;
+  pinned?: boolean;      // 편집기가 이 쪽 객체 번호를 기억하고 있음 (되도록 닫지 않는다)
   page: number;          // FPDF_PAGE
   text: number;          // FPDF_TEXTPAGE (0 = 아직 없음)
   m: M6;                 // page → display (pt)
@@ -178,10 +179,29 @@ export class PdfEngine {
     return pc;
   }
   private page(d: DocCtx, index: number) { return this.pageByKey(d, this.keyAt(d, index)); }
+  /** 메모리를 아끼려고 오래 안 쓴 깨끗한 쪽을 닫는다. 편집기가 객체를 기억하는 쪽(pinned)은 64쪽까지 남기고, 닫으면 알린다 */
+  onEvict: ((docId: number, key: number) => void) | null = null;
   private evict(d: DocCtx) {
     if (d.pages.size <= 24) return;
-    const clean = [...d.pages.values()].filter(p => !p.dirty).sort((a, b) => a.used - b.used);
-    for (const pc of clean.slice(0, d.pages.size - 24)) { this.closePage(pc); d.pages.delete(pc.key); }
+    const clean = [...d.pages.values()].filter(p => !p.dirty).sort((a, b) => (a.pinned ? 1 : 0) - (b.pinned ? 1 : 0) || a.used - b.used);
+    let extra = d.pages.size - 24;
+    for (const pc of clean) {
+      if (extra <= 0) break;
+      if (pc.pinned && d.pages.size <= 64) break;
+      this.closePage(pc); d.pages.delete(pc.key); extra--;
+      d.gen.set(pc.key, this.gen(d, pc.key) + 1); // 그 쪽의 옛 객체 번호는 더 이상 쓰면 안 된다
+      if (pc.pinned) this.onEvict?.(d.id, pc.key);
+    }
+  }
+  /**
+   * 넘어온 객체 번호가 정말 이 쪽(또는 쪽 안의 양식)에 있는지 확인한다.
+   * 닫혔다 다시 열린 쪽이나 다른 쪽·다른 문서의 번호로 고치면 엔진 메모리가 망가지므로 미리 막는다.
+   */
+  private assertOwned(pc: PageCtx, objs: number[]) {
+    if (!objs.length) return;
+    const own = new Set<number>();
+    this.walk(pc, o => { own.add(o); }, false);
+    if (objs.some(o => !own.has(o))) throw new Error('고른 내용이 바뀌었습니다. 다시 골라 주세요');
   }
   private closePage(pc: PageCtx) {
     if (pc.text) this.P.FPDFText_ClosePage(pc.text);
@@ -671,7 +691,7 @@ export class PdfEngine {
 
   /** 글자 객체의 색·굵게를 바꾼다. 되돌리기용으로 바꾸기 전 상태를 돌려준다 */
   setTextStyle(docId: number, key: number, objs: number[], style: { color?: string; bold?: boolean }) {
-    const d = this.D(docId); const pc = this.pageByKey(d, key);
+    const d = this.D(docId); const pc = this.pageByKey(d, key); this.assertOwned(pc, objs);
     const also = this.liftObjs(d, pc, objs);
     const before = objs.map(o => this.textStyleOf(o));
     for (const o of objs) {
@@ -720,10 +740,23 @@ export class PdfEngine {
 
   /** 페이지의 글자 객체를 줄 단위로 묶어 돌려준다 */
   textRuns(docId: number, key: number): TextRun[] {
-    const d = this.D(docId); const pc = this.pageByKey(d, key);
+    const d = this.D(docId); const pc = this.pageByKey(d, key); pc.pinned = true;
     const tp = this.textPage(pc);
-    type Item = { o: number; text: string; m: M6; size: number; vs: number; ang: number; font: number; color: number[]; mode: number; b: number[] };
+    type Item = { o: number; text: string; m: M6; size: number; vs: number; ang: number; font: number; fname: string; color: number[]; mode: number; b: number[]; ox: number; oy: number; left: number; right: number };
     const items: Item[] = [];
+    const names = new Map<number, string>();
+    const fname = (f: number): string => { const had = names.get(f); if (had !== undefined) return had; const n = this.fontName(f).replace(/^[A-Z]{6}\+/, '').replace(/[,-](Regular|Roman|Normal)$/i, ''); names.set(f, n); return n; };
+    // PDFium 글자 흐름에서 객체마다 처음·끝 글자 번호 (사이에 띄어쓰기가 있는지 알아보는 데 쓴다)
+    const span = new Map<number, [number, number]>();
+    const nChars = this.P.FPDFText_CountChars(tp);
+    for (let i = 0; i < nChars; i++) { const o = this.P.FPDFText_GetTextObject(tp, i); if (!o) continue; const sp = span.get(o); if (sp) sp[1] = i; else span.set(o, [i, i]); }
+    const spaceBetween = (a: number, b: number): boolean | null => {
+      const sa = span.get(a), sb = span.get(b); if (!sa || !sb) return null;
+      if (sb[0] === sa[1] + 1) return false;
+      if (sb[0] > sa[1] + 1 && sb[0] - sa[1] <= 3) { for (let i = sa[1] + 1; i < sb[0]; i++) if (this.P.FPDFText_GetUnicode(tp, i) === 32) return true; return false; }
+      return null;
+    };
+    const frame = (ang: number, x: number, y: number) => { const c = Math.cos(-ang), s = Math.sin(-ang); return [x * c - y * s, x * s + y * c]; };
     this.walk(pc, (o, t, fm) => {
       if (t !== OBJ_TEXT) return;
       const text = this.objText(o, tp);
@@ -732,33 +765,83 @@ export class PdfEngine {
       let b = this.objBounds(o); if (!b) return;
       let m = this.objMatrix(o);
       if (fm) { m = mul(m, fm); b = this.mapBounds(b, fm); }
-      const size = this.fontSize(o);
-      items.push({ o, text, m, size, vs: size * Math.hypot(m[2], m[3]), ang: Math.atan2(m[1], m[0]), font: this.P.FPDFTextObj_GetFont(o), color: this.objColor(o), mode: this.P.FPDFTextObj_GetTextRenderMode(o), b });
+      const size = this.fontSize(o), ang = Math.atan2(m[1], m[0]);
+      const [ox, oy] = frame(ang, m[4], m[5]);
+      const xs = [[b[0], b[1]], [b[2], b[3]], [b[0], b[3]], [b[2], b[1]]].map(([x, y]) => frame(ang, x, y)[0]);
+      const font = this.P.FPDFTextObj_GetFont(o);
+      items.push({ o, text, m, size, vs: size * Math.hypot(m[2], m[3]), ang, font, fname: fname(font), color: this.objColor(o), mode: this.P.FPDFTextObj_GetTextRenderMode(o), b, ox, oy, left: Math.min(...xs), right: Math.max(...xs) });
     });
-    const runs: TextRun[] = [];
-    let cur: { items: Item[]; text: string; endX: number; base: number } | null = null;
-    const frame = (it: Item, x: number, y: number) => { const c = Math.cos(-it.ang), s = Math.sin(-it.ang); return [x * c - y * s, x * s + y * c]; };
-    const flush = () => { if (cur) runs.push(this.makeRun(pc, cur.items, cur.text)); cur = null; };
+    const rules = this.verticalRules(pc);
+    // 1) 같은 기울기·같은 기준선끼리 한 줄로 모은다 (내용 순서가 뒤섞여 있어도 화면 위치로)
+    const angKey = (a: number) => Math.round(a * 50);
+    items.sort((a, b) => angKey(a.ang) - angKey(b.ang) || b.oy - a.oy || a.left - b.left);
+    const lines: Item[][] = [];
     for (const it of items) {
-      const [ox, oy] = frame(it, it.m[4], it.m[5]);
-      const corners = [[it.b[0], it.b[1]], [it.b[2], it.b[3]], [it.b[0], it.b[3]], [it.b[2], it.b[1]]].map(([x, y]) => frame(it, x, y)[0]);
-      const right = Math.max(...corners);
-      if (cur) {
-        const f = cur.items[0];
-        const same = f.font === it.font && Math.abs(f.vs - it.vs) < 0.6 && Math.abs(f.ang - it.ang) < 0.02 &&
-          f.color.join() === it.color.join() && f.mode === it.mode && Math.abs(oy - cur.base) < it.vs * 0.25;
-        const gap = ox - cur.endX;
-        if (same && gap > -it.vs * 0.5 && gap < it.vs * 1.6) {
-          const needSpace = gap > it.vs * 0.22 && !/\s$/.test(cur.text) && !/^\s/.test(it.text);
-          cur.text += (needSpace ? ' ' : '') + it.text; cur.items.push(it); cur.endX = Math.max(cur.endX, right);
-          continue;
-        }
-        flush();
-      }
-      cur = { items: [it], text: it.text, endX: right, base: oy };
+      const ln = lines.length ? lines[lines.length - 1] : null, f = ln?.[0];
+      if (ln && f && angKey(f.ang) === angKey(it.ang) && Math.abs(f.oy - it.oy) < Math.max(f.vs, it.vs) * 0.3) ln.push(it);
+      else lines.push([it]);
     }
-    flush();
+    // 2) 줄 안에서 왼쪽부터: 모양이 같고 가까우면 한 덩어리. 표의 세로줄을 넘거나 멀리 떨어지면 나눈다
+    const runs: TextRun[] = [];
+    for (const ln of lines) {
+      ln.sort((a, b) => a.left - b.left);
+      let cur: { items: Item[]; text: string; right: number } | null = null;
+      for (const it of ln) {
+        if (cur) {
+          const p = cur.items[cur.items.length - 1];
+          const gap = it.left - cur.right;
+          const sameLook = Math.abs(p.vs - it.vs) < Math.max(0.6, p.vs * 0.08) && p.color.join() === it.color.join() && p.mode === it.mode;
+          const sameFont = p.fname === it.fname;
+          const near = gap > -it.vs * 0.5 && gap < it.vs * (sameFont ? 1.0 : 0.3);
+          const ruled = Math.abs(it.ang) < 0.01 && rules.some(r => r.x > cur!.right - 0.3 && r.x < it.left + 0.3 && r.y0 < it.oy + it.vs * 0.2 && r.y1 > it.oy + it.vs * 0.3);
+          if (sameLook && near && !ruled) {
+            const known = spaceBetween(p.o, it.o);
+            const needSpace = !/\s$/.test(cur.text) && !/^\s/.test(it.text) && (known ?? (gap > it.vs * 0.25 && !/^[·.,:;)\]}%]/.test(it.text) && !/[·(\[{]$/.test(cur.text)));
+            cur.text += (needSpace ? ' ' : '') + it.text; cur.items.push(it); cur.right = Math.max(cur.right, it.right);
+            continue;
+          }
+          runs.push(this.makeRun(pc, cur.items, cur.text));
+        }
+        cur = { items: [it], text: it.text, right: it.right };
+      }
+      if (cur) runs.push(this.makeRun(pc, cur.items, cur.text));
+    }
     return runs;
+  }
+  /** 표의 세로줄 (쪽 좌표). 글자 줄을 칸마다 나누는 데 쓴다 */
+  private verticalRules(pc: PageCtx) {
+    const rules: { x: number; y0: number; y1: number }[] = [];
+    let budget = 40000;
+    const pt = this.malloc(8);
+    this.walk(pc, (o, t, fm) => {
+      if (t !== OBJ_PATH || budget <= 0) return;
+      const b0 = this.objBounds(o); if (!b0) return;
+      const bb = fm ? this.mapBounds(b0, fm) : b0;
+      if (bb[2] - bb[0] < 3 && bb[3] - bb[1] > 3) { rules.push({ x: (bb[0] + bb[2]) / 2, y0: bb[1], y1: bb[3] }); return; }
+      const n = this.P.FPDFPath_CountSegments(o); if (n <= 0 || n > 4000) return;
+      budget -= n;
+      let m = this.objMatrix(o); if (fm) m = mul(m, fm);
+      const pts: number[][] = []; const flush = () => {
+        if (pts.length < 2) { pts.length = 0; return; }
+        const xs = pts.map(p => p[0]), ys = pts.map(p => p[1]);
+        const w = Math.max(...xs) - Math.min(...xs), h = Math.max(...ys) - Math.min(...ys);
+        if (w < 3 && h > 3) rules.push({ x: (Math.max(...xs) + Math.min(...xs)) / 2, y0: Math.min(...ys), y1: Math.max(...ys) });
+        else for (let i = 1; i < pts.length; i++) { const a = pts[i - 1], c = pts[i]; if (Math.abs(a[0] - c[0]) < 0.8 && Math.abs(a[1] - c[1]) > 3) rules.push({ x: (a[0] + c[0]) / 2, y0: Math.min(a[1], c[1]), y1: Math.max(a[1], c[1]) }); }
+        pts.length = 0;
+      };
+      for (let i = 0; i < n; i++) {
+        const sg = this.P.FPDFPath_GetPathSegment(o, i); if (!sg) continue;
+        const type = this.P.FPDFPathSegment_GetType(sg);
+        if (!this.P.FPDFPathSegment_GetPoint(sg, pt, pt + 4)) continue;
+        const [x, y] = this.f32(pt, 2);
+        if (type === 2 /* MOVETO */) flush();
+        pts.push(ap(m, x, y));
+        if (this.P.FPDFPathSegment_GetClose(sg) && pts.length) pts.push(pts[0]);
+      }
+      flush();
+    }, false);
+    this.free(pt);
+    return rules;
   }
   private makeRun(pc: PageCtx, items: any[], text: string): TextRun {
     let l = Infinity, b = Infinity, r = -Infinity, t = -Infinity;
@@ -793,7 +876,7 @@ export class PdfEngine {
    * 원래 객체는 떼어 두었다가 되돌리기에 쓴다.
    */
   async editRun(docId: number, key: number, objs: number[], newText: string, opts: { font?: string } = {}): Promise<ObjChange> {
-    const d = this.D(docId); const pc = this.pageByKey(d, key);
+    const d = this.D(docId); const pc = this.pageByKey(d, key); this.assertOwned(pc, objs);
     const also = this.liftObjs(d, pc, objs);
     const first = objs[0];
     const m = this.objMatrix(first), size = this.fontSize(first), font = this.P.FPDFTextObj_GetFont(first);
@@ -802,8 +885,17 @@ export class PdfEngine {
     const chars = [...new Set([...lines.join('')])];
     const known = this.fontChars(pc, font);
     const embedded = !!this.P.FPDFFont_GetIsEmbedded(font);
-    const reuse = !opts.font && chars.every(c => known.has(c) || c === ' ' || (!embedded && c.charCodeAt(0) < 256));
-    const splitWords = reuse && embedded && !known.has(' ') && lines.some(l => l.includes(' '));
+    let reuse = !opts.font && chars.every(c => known.has(c) || c === ' ' || (!embedded && c.charCodeAt(0) < 256));
+    // 한글 글꼴이 여러 조각(부분 글꼴)으로 나뉜 PDF: 같은 이름의 조각들을 이어 써서 원래 글꼴을 지킨다
+    let pieceFonts: { font: number; chars: Set<string> }[] | null = null;
+    if (!reuse && !opts.font && embedded) {
+      const base = this.baseFontName(font);
+      const cands = this.fontCharMap(pc).filter(c => this.baseFontName(c.font) === base && this.P.FPDFFont_GetIsEmbedded(c.font));
+      cands.sort((a, b) => (b.font === font ? 1 : 0) - (a.font === font ? 1 : 0));
+      if (cands.length > 1 && chars.every(c => c === ' ' || cands.some(k => k.chars.has(c)))) pieceFonts = cands;
+    }
+    if (pieceFonts) { reuse = true; }
+    const splitWords = reuse && !pieceFonts && embedded && !known.has(' ') && lines.some(l => l.includes(' '));
     let useFont = font, fake = false;
     if (!reuse) {
       const name = this.fontName(font);
@@ -818,10 +910,38 @@ export class PdfEngine {
     const vs = size * Math.hypot(m[2], m[3]);
     const ux = m[2] / Math.hypot(m[2], m[3]), uy = m[3] / Math.hypot(m[2], m[3]); // 글줄의 위쪽 방향
     const dirLen = Math.hypot(m[0], m[1]) || 1, dx = m[0] / dirLen, dyv = m[1] / dirLen; // 글줄 진행 방향
+    const place = (o: number) => {
+      this.P.FPDFPageObj_SetFillColor(o, color[0], color[1], color[2], color[3]);
+      if (mode === TEXTMODE_INVISIBLE) this.P.FPDFTextObj_SetTextRenderMode(o, TEXTMODE_INVISIBLE);
+      const at = Math.min(index + added.length, this.P.FPDFPage_CountObjects(pc.page));
+      this.P.FPDFPage_InsertObjectAtIndex(pc.page, o, at);
+      added.push({ h: o, idx: at });
+    };
     lines.forEach((line, i) => {
       if (!line && lines.length > 1) return;
       const dy = i * vs * 1.25;
       let ox = m[4] - ux * dy, oy = m[5] - uy * dy;
+      if (pieceFonts) {
+        // 글자마다 그 글자가 든 조각 글꼴을 골라 이어 붙인다. 앞으로 나아가는 거리는 정확히 잰다
+        const pf = pieceFonts;
+        const pieces: { font: number; text: string }[] = [];
+        for (const ch of line) {
+          const last = pieces[pieces.length - 1];
+          if (last && (last.font < 0 ? ch === ' ' : (pf.find(k => k.font === last.font)!.chars.has(ch)))) { last.text += ch; continue; }
+          if (ch === ' ') { const k = pf.find(k => k.chars.has(' ')); if (k && last && last.font === k.font) last.text += ch; else pieces.push({ font: k ? k.font : -1, text: ch }); continue; }
+          pieces.push({ font: pf.find(k => k.chars.has(ch))!.font, text: ch });
+        }
+        for (const pc2 of pieces) {
+          if (pc2.font < 0) { const adv = pc2.text.length * size * 0.28; ox += m[0] * adv; oy += m[1] * adv; continue; }
+          const o = this.P.FPDFPageObj_CreateTextObj(d.doc, pc2.font, size);
+          const w = this.wstr(pc2.text); this.P.FPDFText_SetText(o, w); this.free(w);
+          this.setMatrix(o, [m[0], m[1], m[2], m[3], ox, oy]);
+          place(o);
+          const adv = this.advance(d, pc2.font, size, pc2.text);
+          ox += m[0] * adv; oy += m[1] * adv;
+        }
+        return;
+      }
       // 원래 글꼴에 공백 글자가 없으면 낱말마다 객체를 나눠 놓는다
       const pieces = splitWords ? line.split(/( +)/).filter(Boolean) : [line];
       for (const piece of pieces) {
@@ -843,6 +963,26 @@ export class PdfEngine {
     });
     this.touch(pc);
     return { key, gen: this.gen(d, key), removed, added, substituted: !reuse, also };
+  }
+  /** 글꼴 이름 (부분 글꼴 접두어·Regular 떼고) */
+  private baseFontName(f: number) { return this.fontName(f).replace(/^[A-Z]{6}\+/, '').replace(/[,-](Regular|Roman|Normal)$/i, ''); }
+  /** 쪽에 쓰인 글꼴마다 그 글꼴로 그린 글자 모음 */
+  private fontCharMap(pc: PageCtx) {
+    const tp = this.textPage(pc), map = new Map<number, Set<string>>();
+    this.walk(pc, (o, t) => { if (t !== OBJ_TEXT) return; const f = this.P.FPDFTextObj_GetFont(o); let set = map.get(f); if (!set) { set = new Set(); map.set(f, set); } for (const ch of this.objText(o, tp)) set.add(ch); }, false);
+    return [...map].map(([font, chars]) => ({ font, chars }));
+  }
+  /** 글자들이 앞으로 나아가는 거리 (글자 공간 단위): 두 번 이어 쓴 것과 한 번 쓴 것의 오른쪽 끝 차이 */
+  private advance(d: DocCtx, font: number, size: number, text: string) {
+    const right = (t: string) => {
+      const o = this.P.FPDFPageObj_CreateTextObj(d.doc, font, size);
+      const w = this.wstr(t); this.P.FPDFText_SetText(o, w); this.free(w);
+      this.setMatrix(o, [1, 0, 0, 1, 0, 0]);
+      const b = this.objBounds(o); this.P.FPDFPageObj_Destroy(o);
+      return b ? b[2] : 0;
+    };
+    if (!text.trim()) return text.length * size * 0.28;
+    return Math.max(0, right(text + text) - right(text));
   }
   private fakeBold(o: number, color: number[], size: number) {
     this.P.FPDFTextObj_SetTextRenderMode(o, TEXTMODE_FILL_STROKE);
@@ -966,9 +1106,46 @@ export class PdfEngine {
     for (const k of also) this.touch(this.pageByKey(d, k));
     return [...also];
   }
+  /**
+   * 겹친 순서 바꾸기. front 맨 앞 / back 맨 뒤 / forward 한 단계 앞 / backward 한 단계 뒤.
+   * 한 단계는 고른 것과 겹치는 바로 위(아래) 객체를 넘는다. 돌려주는 값은 되돌리기용 원래 자리.
+   */
+  reorder(docId: number, key: number, objs: number[], how: 'front' | 'back' | 'forward' | 'backward') {
+    const d = this.D(docId); const pc = this.pageByKey(d, key); this.assertOwned(pc, objs);
+    const also = this.liftObjs(d, pc, objs);
+    const n = this.P.FPDFPage_CountObjects(pc.page);
+    const list: number[] = []; for (let i = 0; i < n; i++) list.push(this.P.FPDFPage_GetObject(pc.page, i));
+    const sel = new Set(objs);
+    const before = objs.map(o => ({ h: o, idx: list.indexOf(o) })).filter(x => x.idx >= 0).sort((a, b) => a.idx - b.idx);
+    if (!before.length) return { before, also, changed: false };
+    let u = [Infinity, Infinity, -Infinity, -Infinity];
+    for (const { h } of before) { const b = this.objBounds(h); if (b) u = [Math.min(u[0], b[0]), Math.min(u[1], b[1]), Math.max(u[2], b[2]), Math.max(u[3], b[3])]; }
+    const overlaps = (o: number) => { const b = this.objBounds(o); return !!b && b[0] < u[2] && b[2] > u[0] && b[1] < u[3] && b[3] > u[1]; };
+    const pageBg = (o: number) => { const b = this.objBounds(o); return !!b && this.P.FPDFPageObj_GetType(o) === OBJ_PATH && (b[2] - b[0]) > pc.w * 0.95 && (b[3] - b[1]) > pc.h * 0.95; };
+    const lo = before[0].idx, hi = before[before.length - 1].idx;
+    let anchor = 0, after = true;
+    if (how === 'front') anchor = -1;
+    else if (how === 'back') { anchor = 0; for (const o of list) { if (sel.has(o)) continue; if (pageBg(o)) anchor = o; else break; } after = !!anchor; if (!anchor) anchor = -2; }
+    else if (how === 'forward') { anchor = list.slice(hi + 1).find(o => !sel.has(o) && overlaps(o)) || 0; if (!anchor) return { before, also, changed: false }; }
+    else { anchor = list.slice(0, lo).reverse().find(o => !sel.has(o) && overlaps(o) && !pageBg(o)) || 0; after = false; if (!anchor) return { before, also, changed: false }; }
+    for (const { h } of before) this.P.FPDFPage_RemoveObject(pc.page, h);
+    const count = () => this.P.FPDFPage_CountObjects(pc.page);
+    let at = anchor === -1 ? count() : anchor === -2 ? 0 : this.objIndex(pc, anchor) + (after ? 1 : 0);
+    for (const { h } of before) { this.P.FPDFPage_InsertObjectAtIndex(pc.page, h, Math.min(at, count())); at++; }
+    this.touch(pc);
+    return { before, also, changed: true };
+  }
+  /** reorder 되돌리기: 원래 자리로 */
+  restoreOrder(docId: number, key: number, before: { h: number; idx: number }[]) {
+    const d = this.D(docId); const pc = this.pageByKey(d, key);
+    for (const { h } of before) if (this.objIndex(pc, h) < this.P.FPDFPage_CountObjects(pc.page)) this.P.FPDFPage_RemoveObject(pc.page, h);
+    for (const { h, idx } of [...before].sort((a, b) => a.idx - b.idx)) this.P.FPDFPage_InsertObjectAtIndex(pc.page, h, Math.min(idx, this.P.FPDFPage_CountObjects(pc.page)));
+    this.touch(pc);
+    return true;
+  }
   /** 객체 지우기(떼어 두기) */
   removeObjs(docId: number, key: number, objs: number[]): ObjChange {
-    const d = this.D(docId); const pc = this.pageByKey(d, key);
+    const d = this.D(docId); const pc = this.pageByKey(d, key); this.assertOwned(pc, objs);
     const also = this.liftObjs(d, pc, objs);
     const removed = objs.map(o => ({ h: o, idx: this.objIndex(pc, o) }));
     for (const o of objs) this.P.FPDFPage_RemoveObject(pc.page, o);
@@ -995,7 +1172,7 @@ export class PdfEngine {
   /** 화면 좌표 dx,dy만큼 이동 (scale이 있으면 기준점 둘레로 확대) */
   transformObjs(docId: number, key: number, gen: number, objs: number[], dx: number, dy: number, scale: number | [number, number] = 1, about?: { x: number; y: number }) {
     const d = this.D(docId); if (this.gen(d, key) !== gen) return false;
-    const pc = this.pageByKey(d, key);
+    const pc = this.pageByKey(d, key); this.assertOwned(pc, objs);
     const also = this.liftObjs(d, pc, objs);
     // 화면 공간 변환 T를 페이지 공간으로: inv ∘ T ∘ m  (m: page→disp)
     const ax = about?.x ?? 0, ay = about?.y ?? 0;
@@ -1008,7 +1185,7 @@ export class PdfEngine {
 
   /** 편집 모드에서 고를 수 있는 그림/도형 객체 */
   pageObjects(docId: number, key: number): PageObjInfo[] {
-    const d = this.D(docId); const pc = this.pageByKey(d, key);
+    const d = this.D(docId); const pc = this.pageByKey(d, key); pc.pinned = true;
     const out: PageObjInfo[] = [];
     const groups = new Map<string, PageObjInfo & { b: number[] }>();
     this.walk(pc, (o, t, fm) => {
@@ -1025,7 +1202,21 @@ export class PdfEngine {
       }
       const rect = this.toDisp(pc, b[0], b[1], b[2], b[3]);
       if (t === OBJ_PATH && !meta && (rect.w > pc.w * 0.95 && rect.h > pc.h * 0.95)) return; // 페이지 배경
-      out.push({ h: o, type: t === OBJ_IMAGE ? 'image' : meta?.t === 'shape' ? 'shape' : meta?.t === 'free' ? 'free' : 'path', rect, inForm: !!fm, meta: meta || undefined, objs: [o] });
+      let vis: PageObjInfo['vis'];
+      if (t === OBJ_PATH && !meta) {
+        // 보이는지: 칠도 선도 없으면 빼고, 흰색으로만 칠한 상자(표 칸 바탕 등)는 눌러서 고르지 않게 표시
+        const p2 = this.malloc(40);
+        this.P.FPDFPath_GetDrawMode(o, p2, p2 + 4);
+        const fillMode = this.M.HEAP32[p2 >> 2], strokeOn = this.M.HEAP32[(p2 + 4) >> 2];
+        this.P.FPDFPageObj_GetFillColor(o, p2 + 8, p2 + 12, p2 + 16, p2 + 20);
+        this.P.FPDFPageObj_GetStrokeColor(o, p2 + 24, p2 + 28, p2 + 32, p2 + 36);
+        const fc = this.u32(p2 + 8, 4), sc = this.u32(p2 + 24, 4);
+        this.free(p2);
+        const fill = !!fillMode && fc[3] > 8, stroke = !!strokeOn && sc[3] > 8;
+        if (!fill && !stroke) return;
+        vis = { fill, stroke, ghost: fill && !stroke && fc[0] > 245 && fc[1] > 245 && fc[2] > 245 };
+      }
+      out.push({ h: o, type: t === OBJ_IMAGE ? 'image' : meta?.t === 'shape' ? 'shape' : meta?.t === 'free' ? 'free' : 'path', rect, inForm: !!fm, meta: meta || undefined, objs: [o], vis });
     });
     for (const gr of groups.values()) {
       // 글상자의 영역은 적어 둔 위치·폭을 쓴다 (글자 상자보다 정확)
@@ -1178,7 +1369,7 @@ export class PdfEngine {
   }
   /** 도형 선 색·굵기·채우기 바꾸기 (되돌리기용 이전 값을 돌려준다) */
   setShapeStyle(docId: number, key: number, objs: number[], st: { stroke?: string; width?: number; fill?: string }) {
-    const d = this.D(docId); const pc = this.pageByKey(d, key);
+    const d = this.D(docId); const pc = this.pageByKey(d, key); this.assertOwned(pc, objs);
     const before = objs.map(o => this.pathStyleOf(o));
     for (const o of objs) {
       const cur = this.pathStyleOf(o);
@@ -1219,7 +1410,7 @@ export class PdfEngine {
   }
   /** 도형을 새 크기로 다시 그린다 (선 굵기가 찌그러지지 않게) */
   reshape(docId: number, key: number, objs: number[], rect: Rect): ObjChange {
-    const d = this.D(docId); const pc = this.pageByKey(d, key);
+    const d = this.D(docId); const pc = this.pageByKey(d, key); this.assertOwned(pc, objs);
     const o = objs[0]; const m = this.metaOf(o);
     if (!m || m.t !== 'shape') throw new Error('다시 그릴 수 없는 도형입니다');
     const removed = [{ h: o, idx: this.objIndex(pc, o) }];
@@ -1291,7 +1482,7 @@ export class PdfEngine {
   }
   /** 글상자 고치기: 이전 묶음을 떼어 두고 새로 만든다 */
   async replaceTextBox(docId: number, key: number, objs: number[], spec: TextBoxSpec): Promise<ObjChange & { rect: Rect }> {
-    const d = this.D(docId); const pc = this.pageByKey(d, key);
+    const d = this.D(docId); const pc = this.pageByKey(d, key); this.assertOwned(pc, objs);
     const removed = objs.map(o => ({ h: o, idx: this.objIndex(pc, o) })).sort((a, b) => a.idx - b.idx);
     for (const o of objs) this.P.FPDFPage_RemoveObject(pc.page, o);
     const ch = await this.addTextBox(docId, key, spec, removed[0]?.idx);
@@ -1403,7 +1594,9 @@ export class PdfEngine {
   restorePage(docId: number, key: number, at: number, tmp: number) {
     const d = this.D(docId);
     const ip = this.malloc(4); this.M.HEAP32[ip >> 2] = 0;
-    this.P.FPDF_ImportPagesByIndex(d.doc, tmp, ip, 1, at); this.free(ip);
+    const okImp = this.P.FPDF_ImportPagesByIndex(d.doc, tmp, ip, 1, at); this.free(ip);
+    if (!okImp) throw new Error('페이지를 되살리지 못했습니다');
+    this.P.FPDF_CloseDocument(tmp); // 다시 지우면 새 임시 문서를 만든다
     d.keys.splice(at, 0, key);
     d.gen.set(key, this.gen(d, key) + 1);
     this.pageByKey(d, key).dirty = true;
@@ -1424,8 +1617,10 @@ export class PdfEngine {
     const src = this.P.FPDF_LoadMemDocument64(buf, bytes.length, password);
     if (!src) { const e = this.P.FPDF_GetLastError(); this.free(buf); return { error: e === 4 ? 'password' : 'format' }; }
     const n = this.P.FPDF_GetPageCount(src);
-    this.P.FPDF_ImportPagesByIndex(d.doc, src, 0, 0, at);
+    const before = this.P.FPDF_GetPageCount(d.doc);
+    const okImp = this.P.FPDF_ImportPagesByIndex(d.doc, src, 0, 0, at);
     this.P.FPDF_CloseDocument(src); this.free(buf);
+    if (!okImp || this.P.FPDF_GetPageCount(d.doc) !== before + n) return { error: 'format' };
     const keys = Array.from({ length: n }, () => d.nextKey++);
     d.keys.splice(at, 0, ...keys);
     return { keys };

@@ -23,12 +23,16 @@ function remember(c: string) {
 
 let open: { pop: HTMLElement; close: () => void } | null = null;
 
-export interface ColorOpts { value: string; onPick: (c: string) => void; title: string; none?: string; mark?: 'text' | 'line' | 'fill' }
+export interface ColorOpts { value: string; onPick: (c: string) => void; title: string; none?: string; mark?: 'text' | 'line' | 'fill'; label?: string }
+const SVG = (d: string) => `<svg viewBox="0 0 20 20" width="18" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${d}</svg>`;
+/** 테두리(선): 굵은 테두리 네모 / 채우기: 페인트 통 */
+const ICON_LINE = SVG('<rect x="3.5" y="3.5" width="13" height="11" rx="1.5" stroke-width="2.4"/>');
+const ICON_FILL = SVG('<path d="M8.2 2.8l6.4 6.4-5.6 5.6a1.6 1.6 0 0 1-2.3 0L3 11.1a1.6 1.6 0 0 1 0-2.3z"/><path d="M5.4 5.6L3.2 3.4"/><path d="M3.4 9.5h10.2" stroke-width="1.2"/><path d="M16.6 11.6s1.6 1.9 1.6 3a1.6 1.6 0 0 1-3.2 0c0-1.1 1.6-3 1.6-3z" fill="currentColor" stroke="none"/>');
 export function colorButton(o: ColorOpts) {
   const bar = h('span', { class: 'cb-bar' + (o.value ? '' : ' none'), style: { background: o.value || 'transparent' } });
-  const face = o.mark === 'text' ? h('span', { class: 'cb-a' }, '가') : o.mark === 'fill' ? h('span', { class: 'cb-fill' }) : h('span', { class: 'cb-line' });
+  const face = o.mark === 'text' ? h('span', { class: 'cb-a' }, '가') : h('span', { class: 'cb-ico', html: o.mark === 'fill' ? ICON_FILL : ICON_LINE });
   const btn = h('button', { class: 'color-btn', type: 'button', title: o.title, 'aria-label': `${o.title}: ${o.value || '없음'}`, 'aria-haspopup': 'true', 'aria-expanded': 'false' },
-    h('span', { class: 'cb-face' }, face, bar), h('span', { class: 'cb-caret' }, '▾')) as HTMLButtonElement;
+    h('span', { class: 'cb-face' }, face, bar), o.label ? h('span', { class: 'cb-label' }, o.label) : null, h('span', { class: 'cb-caret' }, '▾')) as HTMLButtonElement;
   btn.addEventListener('click', e => { e.stopPropagation(); open?.close(); showPalette(btn, o); });
   return btn;
 }

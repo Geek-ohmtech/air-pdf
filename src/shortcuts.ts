@@ -18,6 +18,8 @@ export function comboOf(e: KeyboardEvent): string | null {
   if (['Control', 'Shift', 'Alt', 'Meta', 'Process', 'Dead', 'Unidentified'].includes(k) || e.isComposing) return null;
   let key = k;
   if (e.code?.startsWith('Key')) key = e.code.slice(3);               // 한글 입력 중에도 자판 위치로
+  else if (e.code === 'BracketLeft') key = '[';                        // Shift를 눌러도 { } 가 아니라 [ ] 로
+  else if (e.code === 'BracketRight') key = ']';
   else if (e.code?.startsWith('Digit')) key = e.code.slice(5);
   else if (k === ' ') key = 'Space';
   else if (k === '+') key = '=';

@@ -381,5 +381,46 @@ await t('글꼴 선택, 글상자, 자유선, 도형 다시 고치기', async ()
   ok(Math.abs(img2.rect.w / img.rect.w - 2) < 0.15 && Math.abs(img2.rect.h / img.rect.h - 0.5) < 0.2, '가로·세로 따로 늘이기');
 });
 
+await t('급여명세서처럼 글자마다 나뉜 PDF', async () => {
+  const id3 = E.open(new Uint8Array(fs.readFileSync(new URL('./fixtures/payslip.pdf', import.meta.url)))).docId!;
+  const k3 = E.keys(id3)[0];
+  const runs = E.textRuns(id3, k3);
+  const r1 = runs.find(r => r.text.startsWith('출근율'));
+  ok(r1?.text === '출근율 2단계 산정 후' && r1.objs.length > 5, '글자마다 따로 든 객체·나뉜 글꼴도 한 줄로: ' + r1?.text);
+  ok(runs.some(r => r.text === '정상·비례·개근월 방식'), '내용 순서가 뒤섞여도 화면 순서로, 가운뎃점 앞뒤에 빈칸 없음');
+  ok(runs.some(r => r.text === '196,520') && runs.some(r => r.text === '국민연금'), '표의 세로줄을 사이에 둔 두 칸은 따로');
+  const objs = E.pageObjects(id3, k3);
+  const top = objs.filter(o => o.rect.y < 80);
+  ok(top.length === 1 && top[0].vis?.ghost === true, '흰색으로만 칠한 상자는 고를 수 없게 표시, 칠도 선도 없는 상자는 빠짐');
+  ok(objs.some(o => o.vis?.fill && !o.vis.ghost && o.rect.y > 250), '회색 상자는 그대로 고를 수 있음');
+  ok(objs.filter(o => o.vis?.stroke && !o.vis.fill).length >= 7, '표 선은 선으로 표시');
+  // 고치기: 원래 글꼴 조각들을 이어 써서 새 글꼴을 넣지 않는다
+  const ch = await E.editRun(id3, k3, r1!.objs, '출근율 3단계 산정 후');
+  const after = E.textRuns(id3, k3).find(r => r.text.startsWith('출근율'));
+  ok(!ch.substituted && after?.text === '출근율 3단계 산정 후', '나뉜 글꼴 조각을 이어 써서 원래 글꼴로 고침: ' + after?.text);
+  ok(Math.abs(after!.rect.w - r1!.rect.w) < r1!.rect.w * 0.08, `고친 뒤 폭이 거의 같음 ${r1!.rect.w.toFixed(1)} → ${after!.rect.w.toFixed(1)}`);
+});
+
+await t('겹친 순서 바꾸기', async () => {
+  const id4 = E.open(makeDoc()).docId!; const k4 = E.keys(id4)[0];
+  const a1 = E.addShape(id4, k4, { kind: 'rect', x: 100, y: 400, w: 100, h: 100, stroke: '#ff0000', width: 2, fill: '#ff0000' });
+  const a2 = E.addShape(id4, k4, { kind: 'rect', x: 150, y: 450, w: 100, h: 100, stroke: '#0000ff', width: 2, fill: '#0000ff' });
+  const a3 = E.addShape(id4, k4, { kind: 'rect', x: 400, y: 700, w: 50, h: 50, stroke: '#00ff00', width: 2, fill: '#00ff00' });
+  const order = () => E.pageObjects(id4, k4).filter(o => o.type === 'shape').map(o => o.meta.stroke);
+  const h1 = a1.added[0].h;
+  E.reorder(id4, k4, [h1], 'forward');
+  ok(order().join() === '#0000ff,#ff0000,#00ff00', '한 단계 앞으로: 겹친 파랑만 넘음 → ' + order().join());
+  const r = E.reorder(id4, k4, [h1], 'front');
+  ok(order().join() === '#0000ff,#00ff00,#ff0000', '맨 앞으로 → ' + order().join());
+  E.restoreOrder(id4, k4, r.before);
+  ok(order().join() === '#0000ff,#ff0000,#00ff00', '되돌리기 → ' + order().join());
+  E.reorder(id4, k4, [a3.added[0].h], 'back');
+  ok(order()[0] === '#00ff00', '맨 뒤로 → ' + order().join());
+  const r2 = E.reorder(id4, k4, [a2.added[0].h], 'backward');
+  ok(!r2.changed && order().join() === '#00ff00,#0000ff,#ff0000', '아래에 겹친 것이 없으면 한 단계 뒤로는 그대로 → ' + order().join());
+  E.reorder(id4, k4, [h1], 'backward');
+  ok(order().join() === '#00ff00,#ff0000,#0000ff', '한 단계 뒤로: 겹친 파랑 밑으로 → ' + order().join());
+});
+
 console.log(fails ? `\n실패 ${fails}건` : '\n모두 통과');
 process.exit(fails ? 1 : 0);

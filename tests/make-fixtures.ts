@@ -86,3 +86,56 @@ fs.writeFileSync(OUT + 'xobject.pdf', rawPdf([
   `<< /Type /XObject /Subtype /Form /BBox [0 0 300 100] /Resources << /Font << /F1 5 0 R >> >> /Length ${fm1.length} >>\nstream\n${fm1}\nendstream`,
 ]));
 console.log('form.pdf, xobject.pdf');
+
+// 급여명세서처럼: 글자마다 따로 든 객체(같은 글꼴이 여러 조각으로 나뉨), 붙어 있는 표 칸, 안 보이는 상자
+{
+  const blank1 = (() => { const dc = P.FPDF_CreateNewDocument(); P.FPDF_ClosePage(P.FPDFPage_New(dc, 0, 595.28, 841.89)); const w = P.PDFiumExt_OpenFileWriter(); P.PDFiumExt_SaveAsCopy(dc, w); const n = P.PDFiumExt_GetFileWriterSize(w), b = M.wasmExports.malloc(n); P.PDFiumExt_GetFileWriterData(w, b, n); const out = M.HEAPU8.slice(b, b + n); P.PDFiumExt_CloseFileWriter(w); P.FPDF_CloseDocument(dc); return out; })();
+  const id2 = E.open(blank1).docId!; const key = E.keys(id2)[0];
+  const e: any = E, dd = e.docs.get(id2), pg = e.page(dd, 0);
+  const all = '출근율 2단계 산정 후 정상·비례·개근월 방식 자동 산정 196,520 국민연금 지방세 39,990 급여';
+  // 같은 글꼴을 두 조각으로 (윈도 인쇄처럼): 글자마다 번갈아 다른 조각을 쓴다
+  const fA = await e.loadSubsetFont(dd, all, 'noto-sans'), fB = await e.loadSubsetFont(dd, all, 'noto-sans');
+  const put = (text: string, x: number, yTop: number, size: number, perChar: boolean, font = fA) => {
+    const y = 841.89 - yTop; let cx = x;
+    const pieces = perChar ? [...text] : [text];
+    pieces.forEach((ch, i) => {
+      if (ch === ' ') { cx += size * 0.3; return; }
+      const o = P.FPDFPageObj_CreateTextObj(dd.doc, perChar ? (i % 2 ? fB : fA) : font, size);
+      const w = e.wstr(ch); P.FPDFText_SetText(o, w); e.free(w);
+      e.setMatrix(o, [1, 0, 0, 1, cx, y]);
+      P.FPDFPageObj_SetFillColor(o, 20, 20, 20, 255);
+      P.FPDFPage_InsertObject(pg.page, o);
+      const bb = e.objBounds(o); cx = bb ? bb[2] + size * 0.02 : cx + size;
+    });
+    return cx;
+  };
+  // 글자마다 객체 + 내용 순서가 뒤섞인 줄 (오른쪽 반을 먼저 그린다)
+  put('정상·비례·개근월 방식', 200, 100, 12, true);
+  put('출근율 2단계 산정 후', 64, 100, 12, true);
+  // 표: 세로줄 하나를 사이에 두고 붙어 있는 두 칸 ("196,520"은 오른쪽 맞춤, "국민연금"은 왼쪽 맞춤)
+  const line = (x1: number, y1: number, x2: number, y2: number) => {
+    const p = P.FPDFPageObj_CreateNewPath(x1, 841.89 - y1); P.FPDFPath_LineTo(p, x2, 841.89 - y2);
+    P.FPDFPageObj_SetStrokeColor(p, 120, 120, 120, 255); P.FPDFPageObj_SetStrokeWidth(p, 0.6); P.FPDFPath_SetDrawMode(p, 0, true);
+    P.FPDFPage_InsertObject(pg.page, p);
+  };
+  for (const y of [180, 200, 220]) line(64, y, 500, y);
+  for (const x of [64, 200, 300, 500]) line(x, 180, x, 220);
+  const nb = (() => { const o = P.FPDFPageObj_CreateTextObj(dd.doc, fA, 11); const w = e.wstr('196,520'); P.FPDFText_SetText(o, w); e.free(w); e.setMatrix(o, [1, 0, 0, 1, 0, 0]); const b = e.objBounds(o); P.FPDFPageObj_Destroy(o); return b[2] - b[0]; })();
+  put('196,520', 300 - 3 - nb, 195, 11, false);
+  put('국민연금', 303, 195, 11, false);
+  put('지방세', 70, 215, 11, false); put('39,990', 210, 215, 11, false);
+  // 안 보이는 상자: 흰색으로만 칠한 사각형, 칠도 선도 없는 사각형, 그리고 보이는 회색 상자
+  const box = (x: number, yTop: number, w: number, h: number, fill: number[] | null, stroke: boolean) => {
+    const p = P.FPDFPageObj_CreateNewRect(x, 841.89 - yTop - h, w, h);
+    if (fill) P.FPDFPageObj_SetFillColor(p, fill[0], fill[1], fill[2], 255);
+    P.FPDFPath_SetDrawMode(p, fill ? 1 : 0, stroke);
+    P.FPDFPage_InsertObject(pg.page, p);
+  };
+  box(120, 40, 200, 30, [255, 255, 255], false);
+  box(330, 40, 120, 30, null, false);
+  box(64, 260, 120, 40, [220, 224, 232], false);
+  put('급여', 70, 285, 12, false);
+  P.FPDFPage_GenerateContent(pg.page); pg.dirty = true;
+  fs.writeFileSync(OUT + 'payslip.pdf', E.save(id2));
+  console.log('payslip.pdf');
+}
