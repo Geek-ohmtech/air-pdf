@@ -18,22 +18,22 @@ type Sel = { kind: 'run'; page: number; key: number; run: TextRun } | { kind: 'o
 
 const ANNOT = { TEXT: 1, SQUARE: 5, CIRCLE: 6, HIGHLIGHT: 9, UNDERLINE: 10, STRIKEOUT: 12, INK: 15 };
 const TOOLS: Record<Tool, { tab: Tab; label: string; icon: IconName; key?: string; hint: string }> = {
-  select: { tab: 'edit', label: '선택', icon: 'select', key: 'v', hint: '글자 줄·그림·도형을 눌러 고르고 끌어서 옮깁니다. 두 번 누르면 글자를 고칩니다. Delete로 지웁니다.' },
-  editText: { tab: 'edit', label: '글자 고치기', icon: 'editText', key: 'e', hint: '원본 글자 줄을 누르면 바로 고칠 수 있습니다. Enter로 확정, Shift+Enter 줄바꿈, Esc 취소.' },
-  addText: { tab: 'edit', label: '글자 추가', icon: 'addText', key: 't', hint: '글자를 넣을 곳을 누르세요. 넣은 뒤에도 고른 상태라 색·크기·글꼴을 바로 바꿀 수 있습니다.' },
-  textbox: { tab: 'edit', label: '글상자', icon: 'textbox', hint: '끌어서 글상자 영역을 정하세요. 폭에 맞춰 줄이 바뀌고, 나중에 두 번 눌러 고칩니다.' },
-  image: { tab: 'edit', label: '이미지', icon: 'image', key: 'i', hint: '이미지를 고르면 현재 쪽에 넣습니다. 붙여넣기(Ctrl+V)와 끌어다 놓기도 됩니다.' },
+  select: { tab: 'edit', label: '선택', icon: 'select', key: 'v', hint: '글자 줄·그림·도형을 눌러 선택하고 끌어서 옮깁니다. 두 번 누르면 글자를 수정합니다. Delete로 삭제합니다.' },
+  editText: { tab: 'edit', label: '글자 수정', icon: 'editText', key: 'e', hint: '원본 글자 줄을 누르면 바로 수정할 수 있습니다. Enter로 확정, Shift+Enter 줄바꿈, Esc 취소.' },
+  addText: { tab: 'edit', label: '글자 추가', icon: 'addText', key: 't', hint: '글자를 넣을 곳을 누르세요. 넣은 뒤에도 선택한 상태라 색·크기·글꼴을 바로 바꿀 수 있습니다.' },
+  textbox: { tab: 'edit', label: '글상자', icon: 'textbox', hint: '끌어서 글상자 영역을 정하세요. 폭에 맞춰 줄이 바뀌고, 나중에 두 번 눌러 수정합니다.' },
+  image: { tab: 'edit', label: '이미지', icon: 'image', key: 'i', hint: '이미지를 선택하면 현재 페이지에 넣습니다. 붙여넣기(Ctrl+V)와 끌어다 놓기도 됩니다.' },
   sign: { tab: 'edit', label: '서명', icon: 'pen', hint: '서명을 그려 이미지로 넣습니다.' },
   table: { tab: 'edit', label: '표', icon: 'table', key: 'b', hint: '표를 넣을 영역을 끌어서 정하세요.' },
   rect: { tab: 'edit', label: '사각형', icon: 'rect', key: 'r', hint: '끌어서 사각형을 그립니다 (PDF 도형).' },
   ellipse: { tab: 'edit', label: '원', icon: 'ellipse', hint: '끌어서 원을 그립니다 (PDF 도형).' },
   line: { tab: 'edit', label: '선', icon: 'line', key: 'l', hint: '끌어서 선을 긋습니다 (PDF 도형).' },
-  free: { tab: 'edit', label: '자유선', icon: 'free', hint: '끌어서 자유롭게 그립니다 (PDF 선). 나중에 골라서 색·굵기를 바꿀 수 있습니다.' },
-  redact: { tab: 'edit', label: '영역 삭제', icon: 'redact', key: 'x', hint: '끌어서 고른 영역의 글자·그림·선을 실제로 지웁니다. 되돌릴 수 없습니다.' },
-  aselect: { tab: 'annot', label: '주석 선택', icon: 'select', hint: '주석을 눌러 고릅니다. 메모는 두 번 눌러 내용을 고칩니다. Delete로 지웁니다.' },
-  highlight: { tab: 'annot', label: '형광펜', icon: 'highlight', key: 'h', hint: '강조할 글자를 끌어서 고르세요.' },
-  underline: { tab: 'annot', label: '밑줄', icon: 'underline', key: 'u', hint: '밑줄 칠 글자를 끌어서 고르세요.' },
-  strike: { tab: 'annot', label: '취소선', icon: 'strike', key: 's', hint: '취소선을 그을 글자를 끌어서 고르세요.' },
+  free: { tab: 'edit', label: '자유선', icon: 'free', hint: '끌어서 자유롭게 그립니다 (PDF 선). 나중에 선택해서 색·굵기를 바꿀 수 있습니다.' },
+  redact: { tab: 'edit', label: '영역 삭제', icon: 'redact', key: 'x', hint: '끌어서 선택한 영역의 글자·그림·선을 실제로 삭제합니다. 되돌릴 수 없습니다.' },
+  aselect: { tab: 'annot', label: '주석 선택', icon: 'select', hint: '주석을 눌러 고릅니다. 메모는 두 번 눌러 내용을 수정합니다. Delete로 삭제합니다.' },
+  highlight: { tab: 'annot', label: '형광펜', icon: 'highlight', key: 'h', hint: '강조할 글자를 끌어서 선택하세요.' },
+  underline: { tab: 'annot', label: '밑줄', icon: 'underline', key: 'u', hint: '밑줄 칠 글자를 끌어서 선택하세요.' },
+  strike: { tab: 'annot', label: '취소선', icon: 'strike', key: 's', hint: '취소선을 그을 글자를 끌어서 선택하세요.' },
   note: { tab: 'annot', label: '메모', icon: 'note', key: 'n', hint: '메모를 붙일 곳을 누르세요.' },
   pen: { tab: 'annot', label: '펜', icon: 'pen', key: 'd', hint: '끌어서 자유롭게 그립니다 (PDF 잉크 주석).' },
   arect: { tab: 'annot', label: '사각 표시', icon: 'rect', hint: '끌어서 사각형 표시를 붙입니다 (주석).' },
@@ -57,10 +57,10 @@ export class Editor {
   private objs = new Map<number, PageObjInfo[] | Promise<PageObjInfo[]>>();
   private annots = new Map<number, AnnotInfo[] | Promise<AnnotInfo[]>>();
   private _sel: Sel | null = null;
-  /** 고른 것. 새로 정하면 함께 고른 것(more)은 비운다 (여러 개는 sel을 정한 뒤 more를 채운다) */
+  /** 선택한 것. 새로 정하면 함께 선택한 것(more)은 비운다 (여러 개는 sel을 정한 뒤 more를 채운다) */
   private get sel(): Sel | null { return this._sel; }
   private set sel(v: Sel | null) { this._sel = v; this.more = []; }
-  /** Shift+클릭·끌어 고르기로 함께 고른 것 (같은 쪽, sel 제외) */
+  /** Shift+클릭·끌어 선택으로 함께 선택한 것 (같은 페이지, sel 제외) */
   private more: Sel[] = [];
   /** 도구 단추를 두 번 누르면 그 도구를 계속 쓴다 (아니면 하나 넣고 선택 도구로 돌아감) */
   private toolLock = false;
@@ -117,13 +117,13 @@ export class Editor {
   }
   /** 입력 중인 글자를 확정한다 (끝날 때까지 기다릴 수 있다) */
   commitPending(): Promise<void> { return this.editing ? this.editing.commit() : Promise.resolve(); }
-  /** 엔진이 그 쪽을 닫았다: 기억해 둔 객체 번호를 버린다 */
+  /** 엔진이 그 페이지를 닫았다: 기억해 둔 객체 번호를 버린다 */
   dropPage(key: number) {
     this.runs.delete(key); this.objs.delete(key); this.annots.delete(key);
     if (this.sel?.key === key) { const p = this.sel.page; this.sel = null; this.paintPage(p); this.renderProps(); }
     if (this.hover && this.V.pages[this.hover.page]?.key === key) this.hover = null;
   }
-  /** 쪽 구조가 바뀌었다 (삭제·되살리기·옮기기·회전): 쪽마다 기억한 것을 모두 버린다 */
+  /** 페이지 구조가 바뀌었다 (삭제·되살리기·옮기기·회전): 페이지마다 기억한 것을 모두 버린다 */
   dropCaches() {
     this.runs.clear(); this.objs.clear(); this.annots.clear();
     this.sel = null; this.hover = null;
@@ -140,7 +140,7 @@ export class Editor {
   }
   /** 입력란 채우기를 허용하는 도구인가 */
   allowsForms() { return this.tool === 'select' || this.tool === 'aselect'; }
-  hint() { return this.more.length ? `${this.more.length + 1}개 고름 · 끌어서 함께 옮기기 · Shift+클릭으로 더하거나 빼기 · Delete로 지우기 · Esc 해제` : this.sel ? '선택됨 · 끌어서 옮기기 · Shift+클릭으로 여러 개 고르기 · 화살표로 1pt씩 · Delete로 지우기 · Esc 선택 해제' : TOOLS[this.tool]?.hint || ''; }
+  hint() { return this.more.length ? `${this.more.length + 1}개 선택됨 · 끌어서 함께 옮기기 · Shift+클릭으로 더하거나 빼기 · Delete로 삭제 · Esc 해제` : this.sel ? '선택됨 · 끌어서 옮기기 · Shift+클릭으로 여러 개 선택 · 화살표로 1pt씩 · Delete로 삭제 · Esc 선택 해제' : TOOLS[this.tool]?.hint || ''; }
 
   /* ───────────── 리본 ───────────── */
   private buildRibbon() {
@@ -179,17 +179,17 @@ export class Editor {
       this.app.sidebar.show('annots');
     } else if (t === 'page') {
       this.toolBar.append(
-        this.actBtn('rotL', '왼쪽 회전 ▾', (e?: any) => this.rotateMenu(e, -1), '왼쪽으로 돌리기: 현재·고른·모든 쪽'), this.actBtn('rotR', '오른쪽 회전 ▾', (e?: any) => this.rotateMenu(e, 1), '오른쪽으로 돌리기: 현재·고른·모든 쪽'), sep(),
-        this.actBtn('pageAdd', '빈 쪽', () => this.insertBlank()), this.actBtn('image', '이미지 쪽', () => this.imagePages(), '이미지를 새 쪽으로 넣기'), this.actBtn('merge', 'PDF 합치기', () => this.mergePdf()), this.actBtn('extract', '쪽 뽑아내기', () => this.extract()), sep(),
-        this.actBtn('up', '앞으로', () => this.shiftPages(-1)), this.actBtn('down', '뒤로', () => this.shiftPages(1)), this.actBtn('trash', '쪽 삭제', () => this.deletePages()), sep(),
+        this.actBtn('rotL', '왼쪽 회전 ▾', (e?: any) => this.rotateMenu(e, -1), '왼쪽으로 돌리기: 현재·선택한·모든 페이지'), this.actBtn('rotR', '오른쪽 회전 ▾', (e?: any) => this.rotateMenu(e, 1), '오른쪽으로 돌리기: 현재·선택한·모든 페이지'), sep(),
+        this.actBtn('pageAdd', '빈 페이지', () => this.insertBlank()), this.actBtn('image', '이미지 페이지', () => this.imagePages(), '이미지를 새 페이지로 삽입'), this.actBtn('merge', 'PDF 합치기', () => this.mergePdf()), this.actBtn('extract', '페이지 추출', () => this.extract()), sep(),
+        this.actBtn('up', '앞으로', () => this.shiftPages(-1)), this.actBtn('down', '뒤로', () => this.shiftPages(1)), this.actBtn('trash', '페이지 삭제', () => this.deletePages()), sep(),
         this.actBtn('grid', '페이지 구성', () => this.app.organizer.show(), '페이지만 크게 늘어놓고 순서·삭제·삽입 (Ctrl+Shift+G)'),
-        h('span', { class: 'rb-note' }, '왼쪽 쪽 목록에서 Ctrl/Shift+클릭으로 여러 쪽을 고르고, 끌어서 순서를 바꿉니다.'));
+        h('span', { class: 'rb-note' }, '왼쪽 페이지 목록에서 Ctrl/Shift+클릭으로 여러 페이지를 선택하고, 끌어서 순서를 바꿉니다.'));
       this.app.sidebar.show('thumbs');
       this.setTool('select');
     } else {
       this.toolBar.append(
         this.actBtn('scan', '문서 보정', () => this.correctPages(), '사진·스캔 페이지를 반듯하게 펴고 기울기·그늘·대비를 바로잡습니다 (선택한 페이지 또는 현재 페이지)'),
-        this.actBtn('ocr', '글자 인식', () => this.ocrDialog(), '스캔한 쪽의 글자를 인식해 검색·복사되게 합니다 (OCR)'), sep(),
+        this.actBtn('ocr', '글자 인식', () => this.ocrDialog(), '스캔한 페이지의 글자를 인식해 검색·복사되게 합니다 (OCR)'), sep(),
         this.actBtn('lock', '암호 설정', () => this.setPassword()), this.actBtn('lock', '암호 해제', () => this.removePassword()), sep(),
         this.actBtn('info', '문서 속성', () => this.editMeta()), this.actBtn('comments', '작성자 이름', () => this.setAuthor()));
       this.setTool('select');
@@ -224,18 +224,18 @@ export class Editor {
     const lbl = (txt: string) => h('span', { class: 'prop-lbl' }, txt);
     if (s && this.more.length) { // 여러 개
       const all = this.allSel();
-      P.append(lbl(`${all.length}개 고름`));
+      P.append(lbl(`${all.length}개 선택됨`));
       if (all.every(x => x.kind === 'run')) P.append(color('글자 색', '', c => this.styleMany({ color: c }), 'text'), boldBtn(false, () => this.styleMany({ bold: true })));
       else if (all.every(x => x.kind === 'obj' && ['shape', 'free', 'path'].includes(x.obj.type))) P.append(color('선 색', '', c => this.setShape({ stroke: c })), num('굵기', this.props.width, 0.25, 30, 0.25, n => this.setShape({ width: n })));
       P.append(h('button', { class: 'btn sm', type: 'button', title: '겹친 순서', onclick: (e: MouseEvent) => this.arrangeMenu(e) }, icon('layers'), '순서 ▾'));
-      P.append(h('button', { class: 'btn sm danger-ghost', type: 'button', onclick: () => this.deleteSel() }, icon('trash'), '모두 지우기'));
+      P.append(h('button', { class: 'btn sm danger-ghost', type: 'button', onclick: () => this.deleteSel() }, icon('trash'), '모두 삭제'));
       return;
     }
-    // 글자 (새 글자, 고른 글자 줄, 표)
+    // 글자 (새 글자, 선택한 글자 줄, 표)
     const run = s?.kind === 'run' ? s.run : null;
     if (run || t === 'addText' || t === 'editText') {
       const cur = run ? { color: run.color, size: run.size, bold: run.bold, font: '' } : { color: this.props.textColor, size: this.props.fontSize, bold: this.props.bold, font: this.props.font };
-      if (run) P.append(lbl('고른 글자'));
+      if (run) P.append(lbl('선택한 글자'));
       P.append(this.fontSelect(cur.font || this.props.font, f => this.setText('font', f), run ? run.font : ''),
         color('글자 색', cur.color, c => this.setText('color', c), 'text'),
         num('크기', cur.size, 4, 200, 0.5, n => this.setText('size', n)),
@@ -264,7 +264,7 @@ export class Editor {
       P.append(color('색', this.props.annotColor, c => { this.props.annotColor = c; this.renderProps(); }));
       if (t !== 'note') P.append(num('굵기', this.props.width, 0.5, 20, 0.5, n => this.props.width = n));
     } else if (t === 'redact') {
-      const what = h('select', { class: 'sel', 'aria-label': '지울 대상' }, h('option', { value: 'all', selected: this.props.redactWhat === 'all' ? '' : undefined }, '지울 대상: 전부 (글자·그림·선)'), h('option', { value: 'text', selected: this.props.redactWhat === 'text' ? '' : undefined }, '지울 대상: 글자만'));
+      const what = h('select', { class: 'sel', 'aria-label': '삭제할 대상' }, h('option', { value: 'all', selected: this.props.redactWhat === 'all' ? '' : undefined }, '삭제할 대상: 전부 (글자·그림·선)'), h('option', { value: 'text', selected: this.props.redactWhat === 'text' ? '' : undefined }, '삭제할 대상: 글자만'));
       what.addEventListener('change', () => { this.props.redactWhat = what.value as any; this.renderProps(); });
       P.append(what);
       if (this.props.redactWhat !== 'text') {
@@ -279,9 +279,9 @@ export class Editor {
       P.append(lbl('이미지'), h('label', { class: 'chk', title: '모서리 손잡이로 크기를 바꿀 때 가로세로 비율 유지 (Shift를 누르면 반대로)' }, cb, ' 비율 유지'));
     }
     if (s && s.kind !== 'annot') P.append(h('button', { class: 'btn sm', type: 'button', title: '겹친 순서: 앞으로 가져오기·뒤로 보내기', onclick: (e: MouseEvent) => this.arrangeMenu(e) }, icon('layers'), '순서 ▾'));
-    if (s) P.append(h('button', { class: 'btn sm danger-ghost', type: 'button', onclick: () => this.deleteSel() }, icon('trash'), '지우기'));
+    if (s) P.append(h('button', { class: 'btn sm danger-ghost', type: 'button', onclick: () => this.deleteSel() }, icon('trash'), '삭제'));
   }
-  /** 글꼴 고르기 (앱 글꼴 + 컴퓨터 글꼴) */
+  /** 글꼴 선택 (앱 글꼴 + 컴퓨터 글꼴) */
   private fontSelect(cur: string, set: (id: string) => void, origName = '') {
     const sel = h('select', { class: 'sel font-sel', 'aria-label': '글꼴', title: '글꼴' }) as HTMLSelectElement;
     if (origName) sel.append(h('option', { value: '', selected: '' }, `원래 글꼴 (${origName})`));
@@ -309,8 +309,8 @@ export class Editor {
     return sel;
   }
 
-  /* ───────────── 고른 것에 바로 적용 ───────────── */
-  /** 글자 속성: 입력 중이면 입력 칸에, 고른 글자 줄이 있으면 그 줄에 바로 */
+  /* ───────────── 선택한 것에 바로 적용 ───────────── */
+  /** 글자 속성: 입력 중이면 입력 칸에, 선택한 글자 줄이 있으면 그 줄에 바로 */
   private async setText(field: 'font' | 'color' | 'size' | 'bold', v: any) {
     const map: any = { font: 'font', color: 'textColor', size: 'fontSize', bold: 'bold' };
     (this.props as any)[map[field]] = v;
@@ -350,7 +350,7 @@ export class Editor {
       }
     } catch (e: any) { toast('바꾸지 못했습니다: ' + e.message); }
   }
-  /** 하나 넣은 뒤: 선택 도구로 돌아가 방금 넣은 것을 골라 둔다 (도구를 고정했으면 그대로) */
+  /** 하나 넣은 뒤: 선택 도구로 돌아가 방금 넣은 것을 선택해 둔다 (도구를 고정했으면 그대로) */
   private async afterCreate(page: number, h0: number | undefined, kind: 'obj' | 'run' = 'obj') {
     if (!this.toolLock && this.tool !== 'select' && TOOLS[this.tool].tab === 'edit') this.setTool('select');
     if (kind === 'run') await this.reselectRun(page, h0); else await this.reselectObj(page, h0);
@@ -392,7 +392,7 @@ export class Editor {
     this.changed(key);
     await this.reselectObj(s.page, objs[0]);
   }
-  /** 글상자 속성: 고른 글상자를 새 속성으로 다시 만든다 */
+  /** 글상자 속성: 선택한 글상자를 새 속성으로 다시 만든다 */
   private async setBox(patch: any) {
     const s = this.sel;
     const map: any = { font: 'font', color: 'textColor', size: 'fontSize', bold: 'bold', align: 'align', border: 'border', fill: 'tbFill' };
@@ -402,7 +402,7 @@ export class Editor {
     try {
       if (patch.font) await ensureFont(this.app, patch.font);
       const ch = await this.E.call<ObjChange>('replaceTextBox', [this.doc.id, s.key, s.obj.objs, { ...s.obj.meta, ...patch }]);
-      this.objEntry('글상자 고치기', ch);
+      this.objEntry('글상자 수정', ch);
       await this.reselectObj(s.page, ch.added[0]?.h);
     } catch (e: any) { toast('글상자를 고치지 못했습니다: ' + e.message); }
   }
@@ -411,7 +411,7 @@ export class Editor {
     const s = this.sel; if (s?.kind !== 'obj') return;
     const id = this.doc.id, key = s.key, o = s.obj, objs = o.objs || [o.h];
     this.hover = null;
-    if (o.type === 'textbox') { // 글상자는 쪽 밖으로 나가지 않게
+    if (o.type === 'textbox') { // 글상자는 페이지 밖으로 나가지 않게
       const pg = this.V.pages[s.page];
       const x = Math.max(0, r1.x), R = Math.min(pg.w, r1.x + r1.w);
       r1 = { ...r1, x, w: Math.max(40, R - x) };
@@ -497,7 +497,7 @@ export class Editor {
     }
     if (this.drag?.page === pe.index && this.drag.preview) svg.append(this.drag.preview);
   }
-  /** 고른 것의 크기 조절 손잡이: 이름과 위치 */
+  /** 선택한 것의 크기 조절 손잡이: 이름과 위치 */
   private handles(r: Rect): [string, number, number][] {
     const s = this.sel; if (!s || s.kind !== 'obj') return [];
     const L = r.x - 2, T = r.y - 2, R = r.x + r.w + 2, B = r.y + r.h + 2, cx = (L + R) / 2, cy = (T + B) / 2;
@@ -516,7 +516,7 @@ export class Editor {
     return s.kind === 'run' ? s.run.rect : s.kind === 'obj' ? s.obj.rect : s.annot.rect;
   }
   private paintPage(i: number) { const pe = this.V.pageEl(i); if (pe) this.paint(pe); }
-  /** 입력 칸을 열 때: 고른 표시·마우스 올림 표시를 지워 겹쳐 보이지 않게 */
+  /** 입력 칸을 열 때: 선택한 표시·마우스 올림 표시를 삭제해 겹쳐 보이지 않게 */
   private clearSelFor(page: number) {
     const old = this.sel?.page; this.sel = null; this.more = []; this.hover = null;
     if (old !== undefined && old !== page) this.paintPage(old);
@@ -601,7 +601,7 @@ export class Editor {
       if (old !== undefined && old !== page) this.paintPage(old);
       this.paintPage(page); this.renderProps(); this.app.updateStatus();
       if (hit && !e.shiftKey) { this.drag = { kind: 'move', page, x0: x, y0: y, dx: 0, dy: 0, moved: false }; return true; }
-      if (!hit) { // 빈 곳에서 끌면 범위 안의 것을 모두 고른다
+      if (!hit) { // 빈 곳에서 끌면 범위 안의 것을 모두 선택한다
         const preview = svgEl('rect', { class: 'marquee', x, y, width: 0, height: 0 });
         this.drag = { kind: 'marquee', page, x0: x, y0: y, x, y, preview, add: e.shiftKey };
         return true;
@@ -632,7 +632,7 @@ export class Editor {
       if (run) { this.openRunEditor(page, run); return true; }
       const tb = this.hitObj(page, x, y);
       if (tb?.type === 'textbox') { this.openTextBoxEditor(page, tb.rect, tb); return true; }
-      toast('여기에는 고칠 수 있는 글자가 없습니다. 새 글자는 “글자 추가”를 쓰세요.'); return true;
+      toast('여기에는 수정할 수 있는 글자가 없습니다. 새 글자는 “글자 추가”를 쓰세요.'); return true;
     }
     if (t === 'addText') {
       if (this.sel?.kind === 'run' && this.sel.page === page && inRect(this.sel.run.rect, x, y, 2)) { this.drag = { kind: 'move', page, x0: x, y0: y, dx: 0, dy: 0, moved: false }; return true; }
@@ -785,7 +785,7 @@ export class Editor {
     let ok: boolean | void;
     try { ok = await e[dir](); }
     catch (err: any) { from.push(e); toast(`“${e.label}”을 ${dir === 'undo' ? '되돌리지' : '다시 하지'} 못했습니다: ${err.message}`); return; }
-    if (ok === false) toast(`“${e.label}”은 ${dir === 'undo' ? '되돌릴' : '다시 할'} 수 없습니다 (그 쪽이 다시 만들어졌습니다).`);
+    if (ok === false) toast(`“${e.label}”은 ${dir === 'undo' ? '되돌릴' : '다시 할'} 수 없습니다 (그 페이지가 다시 만들어졌습니다).`);
     to.push(e);
     this.sel = null;
     if (e.structural) { this.dropCaches(); await this.app.reloadPages(); }
@@ -802,7 +802,7 @@ export class Editor {
     });
     this.changed(ch.key);
     for (const k of ch.also || []) this.changed(k);
-    if (ch.also?.length) toast(`같은 양식을 함께 쓰는 다른 쪽 ${ch.also.length}곳도 정리했습니다 (그쪽 내용은 그대로입니다).`, 3600);
+    if (ch.also?.length) toast(`같은 양식을 함께 쓰는 다른 페이지 ${ch.also.length}곳도 정리했습니다 (그쪽 내용은 그대로입니다).`, 3600);
   }
   private annotEntry(label: string, key: number, aid: number) {
     const id = this.doc.id;
@@ -810,7 +810,7 @@ export class Editor {
     this.changed(key); this.refreshAnnotList();
   }
 
-  /* ───────────── 원본 글자 고치기 ───────────── */
+  /* ───────────── 원본 글자 수정 ───────────── */
   private fontFor(run: TextRun) { return SERIF.test(run.font) ? '"Noto Serif KR", "Batang", "AppleMyungjo", serif' : '"Malgun Gothic", "Apple SD Gothic Neo", "Noto Sans KR", sans-serif'; }
   private placeEditor(page: number, r: Rect, size: number, opts: { font: string; color: string; bold: boolean; text: string; minW?: number }) {
     const pe = this.V.pageEl(page); if (!pe) return null;
@@ -829,7 +829,7 @@ export class Editor {
   private openRunEditor(page: number, run: TextRun) {
     this.commitPending();
     const key = this.V.pages[page].key;
-    if (run.angle) toast('기울어진 글자도 고칠 수 있지만 입력 칸은 똑바로 보입니다.', 2200);
+    if (run.angle) toast('기울어진 글자도 수정할 수 있지만 입력 칸은 똑바로 보입니다.', 2200);
     const ta = this.placeEditor(page, { x: run.rect.x - 2, y: run.rect.y - run.size * 0.12, w: run.rect.w, h: run.rect.h }, run.size, { font: this.fontFor(run), color: run.color, bold: run.bold, text: run.text, minW: run.rect.w + 4 });
     if (!ta) return;
     ta.classList.add('cover');
@@ -840,9 +840,9 @@ export class Editor {
       ta.remove();
       if (cancel || text === run.text) return;
       try {
-        if (!text) { const ch = await this.E.call<ObjChange>('removeObjs', [this.doc.id, key, run.objs]); this.objEntry('글자 지우기', ch); return; }
+        if (!text) { const ch = await this.E.call<ObjChange>('removeObjs', [this.doc.id, key, run.objs]); this.objEntry('글자 삭제', ch); return; }
         const ch = await this.E.call<ObjChange>('editRun', [this.doc.id, key, run.objs, text]);
-        this.objEntry('글자 고치기', ch);
+        this.objEntry('글자 수정', ch);
         if (ch.substituted && !this.warnedSub) { this.warnedSub = true; toast('원래 글꼴에 없는 글자가 있어 그 줄은 Noto Sans KR 글꼴로 넣었습니다. 글자로 저장되어 검색·복사가 됩니다.', 5200); }
       } catch (e: any) { toast('글자를 고치지 못했습니다: ' + e.message); }
     };
@@ -865,8 +865,8 @@ export class Editor {
         await ensureFont(this.app, this.props.font);
         const ch = await this.E.call<ObjChange>('addText', [this.doc.id, key, { x: x + 2, y: y + 1, text, size: this.props.fontSize, color: this.props.textColor, bold: this.props.bold, font: this.props.font }]);
         this.objEntry('글자 추가', ch);
-        await this.afterCreate(page, ch.added[0]?.h, 'run'); // 넣은 글자를 골라 둔다 → 바로 색·크기·글꼴을 바꿀 수 있다
-        this.app.status.querySelector('.st-hint')!.textContent = '넣은 글자가 골라져 있습니다 · 위에서 색·크기·글꼴을 바로 바꿀 수 있습니다';
+        await this.afterCreate(page, ch.added[0]?.h, 'run'); // 넣은 글자를 선택해 둔다 → 바로 색·크기·글꼴을 바꿀 수 있다
+        this.app.status.querySelector('.st-hint')!.textContent = '넣은 글자가 선택되어 있습니다 · 위에서 색·크기·글꼴을 바로 바꿀 수 있습니다';
       } catch (e: any) { toast('글자를 넣지 못했습니다: ' + e.message); }
     };
     this.bindEditorKeys(ta, commit);
@@ -901,10 +901,10 @@ export class Editor {
       try {
         await ensureFont(this.app, this.props.font);
         const spec = { ...(m || {}), x: r.x, y: r.y, w: r.w, minH: m?.minH ?? r.h, text, font: this.props.font, size: this.props.fontSize, color: this.props.textColor, bold: this.props.bold, align: this.props.align, border: this.props.border, bw: m?.bw ?? 1, fill: this.props.tbFill, pad: 6 };
-        if (existing && !text) { const ch = await this.E.call<ObjChange>('removeObjs', [this.doc.id, key, existing.objs]); this.objEntry('글상자 지우기', ch); this.sel = null; return; }
+        if (existing && !text) { const ch = await this.E.call<ObjChange>('removeObjs', [this.doc.id, key, existing.objs]); this.objEntry('글상자 삭제', ch); this.sel = null; return; }
         if (!text) return;
         const ch = await this.E.call<ObjChange>(existing ? 'replaceTextBox' : 'addTextBox', existing ? [this.doc.id, key, existing.objs, spec] : [this.doc.id, key, spec]);
-        this.objEntry(existing ? '글상자 고치기' : '글상자', ch);
+        this.objEntry(existing ? '글상자 수정' : '글상자', ch);
         if (existing) await this.reselectObj(page, ch.added[0]?.h); else await this.afterCreate(page, ch.added[0]?.h);
       } catch (e: any) { toast('글상자를 넣지 못했습니다: ' + e.message); }
     };
@@ -923,7 +923,7 @@ export class Editor {
     ta.addEventListener('pointerdown', e => e.stopPropagation());
   }
 
-  /* ───────────── 고른 것 옮기기 / 크기 / 지우기 ───────────── */
+  /* ───────────── 선택한 것 옮기기 / 크기 / 삭제 ───────────── */
   private selObjs(): number[] { return this.allSel().flatMap(s => s.kind === 'run' ? s.run.objs : s.kind === 'obj' ? (s.obj.objs || [s.obj.h]) : []); }
   private async moveSel(dx: number, dy: number, merge = false) {
     const s = this.sel; if (!s || s.kind === 'annot') return;
@@ -947,7 +947,7 @@ export class Editor {
     this.changed(key);
     this.sel = keep; this.more = keepMore; this.paintPage(s.page);
   }
-  /** 겹친 순서 바꾸기 (고른 것 모두) */
+  /** 겹친 순서 바꾸기 (선택한 것 모두) */
   async arrange(how: 'front' | 'back' | 'forward' | 'backward') {
     const s = this.sel; if (!s || s.kind === 'annot') return;
     const id = this.doc.id, key = s.key, objs = this.selObjs(), keepSel = this.sel, keepMore = this.more;
@@ -978,11 +978,11 @@ export class Editor {
     if (s.kind === 'annot') {
       await this.E.call('setAnnotRemoved', [this.doc.id, s.key, s.annot.id, true]);
       const id = this.doc.id;
-      this.push({ label: '주석 지우기', keys: [s.key], undo: () => this.E.call('setAnnotRemoved', [id, s.key, s.annot.id, false]), redo: () => this.E.call('setAnnotRemoved', [id, s.key, s.annot.id, true]) });
+      this.push({ label: '주석 삭제', keys: [s.key], undo: () => this.E.call('setAnnotRemoved', [id, s.key, s.annot.id, false]), redo: () => this.E.call('setAnnotRemoved', [id, s.key, s.annot.id, true]) });
       this.changed(s.key); this.refreshAnnotList();
     } else {
       const ch = await this.E.call<ObjChange>('removeObjs', [this.doc.id, s.key, objs]);
-      this.objEntry(many ? `${many + 1}개 지우기` : s.kind === 'run' ? '글자 지우기' : '객체 지우기', ch);
+      this.objEntry(many ? `${many + 1}개 삭제` : s.kind === 'run' ? '글자 삭제' : '객체 삭제', ch);
     }
     this.renderProps(); this.app.updateStatus();
   }
@@ -996,10 +996,10 @@ export class Editor {
         : { kind: t, ...r, stroke: P.stroke, width: P.width, fill: P.fill === 'same' ? P.stroke : P.fill || undefined };
       const ch = await this.E.call<ObjChange>('addShape', [id, key, spec]);
       this.objEntry(t === 'line' ? '선' : t === 'rect' ? '사각형' : '원', ch);
-      await this.afterCreate(page, ch.added[0]?.h); // 방금 그린 도형을 골라 둔다 → 색·굵기·크기를 바로 고칠 수 있다
+      await this.afterCreate(page, ch.added[0]?.h); // 방금 그린 도형을 선택해 둔다 → 색·굵기·크기를 바로 수정할 수 있다
     } else if (t === 'redact') {
       const textOnly = P.redactWhat === 'text';
-      if (!(await confirmBox(textOnly ? '영역의 글자만 지우기' : '영역 삭제', (textOnly ? '고른 영역의 글자만 PDF에서 실제로 지웁니다. 그림·선·표 테두리는 그대로 남습니다.' : '고른 영역의 글자·그림·선을 PDF에서 실제로 지웁니다. 덮어 가리는 것이 아니어서 개인정보를 지울 때 안전합니다.') + ' 이 작업은 되돌릴 수 없고, 지금까지의 되돌리기 기록도 비워집니다.', '지우기', true))) return;
+      if (!(await confirmBox(textOnly ? '영역의 글자만 삭제' : '영역 삭제', (textOnly ? '선택한 영역의 글자만 PDF에서 실제로 삭제합니다. 그림·선·표 테두리는 그대로 남습니다.' : '선택한 영역의 글자·그림·선을 PDF에서 실제로 삭제합니다. 덮어 가리는 것이 아니어서 개인정보를 삭제할 때 안전합니다.') + ' 이 작업은 되돌릴 수 없고, 지금까지의 되돌리기 기록도 비워집니다.', '삭제', true))) return;
       if (textOnly) await this.E.call('redactText', [id, key, r]);
       else await this.E.call('redact', [id, key, r, P.redactFill === 'black' ? '#000000' : null]);
       this.undoS = []; this.redoS = []; this.updateUndo();
@@ -1021,7 +1021,7 @@ export class Editor {
     const cols = h('input', { class: 'field num', type: 'number', value: '3', min: '1', max: '20' });
     const head = h('input', { type: 'checkbox', checked: '' });
     const res = await dialog({
-      title: '표 넣기', body: h('div', { class: 'form grid2' }, h('label', { class: 'lbl' }, '줄 수'), rows, h('label', { class: 'lbl' }, '칸 수'), cols, h('label', { class: 'chk' }, head, ' 첫 줄을 제목 줄로 (배경색·굵게)')),
+      title: '표 삽입', body: h('div', { class: 'form grid2' }, h('label', { class: 'lbl' }, '줄 수'), rows, h('label', { class: 'lbl' }, '칸 수'), cols, h('label', { class: 'chk' }, head, ' 첫 줄을 제목 줄로 (배경색·굵게)')),
       buttons: [{ label: '취소', value: false }, { label: '다음: 내용 입력', value: true, primary: true }],
       collect: () => ({ rows: +rows.value, cols: +cols.value, head: (head as HTMLInputElement).checked }),
     });
@@ -1037,7 +1037,7 @@ export class Editor {
     for (let i = 0; i < R * C; i++) grid.append(h('textarea', { class: 'tbl-cell' + (head && i < C ? ' head' : ''), rows: '1', 'aria-label': `${Math.floor(i / C) + 1}줄 ${i % C + 1}칸`, spellcheck: 'false' }));
     const bar = h('div', { class: 'tbl-bar' },
       h('button', { class: 'btn sm', type: 'button', onclick: () => this.closeTableEditor() }, '취소'),
-      h('button', { class: 'btn sm primary', type: 'button', onclick: () => this.commitTable() }, icon('check'), '표 넣기'));
+      h('button', { class: 'btn sm primary', type: 'button', onclick: () => this.commitTable() }, icon('check'), '표 삽입'));
     this.tableEd = h('div', { class: 'tbl-ed no-view-pointer' }, grid, bar);
     this.tableState = { page, key, r, R, C, head };
     this.V.pageEl(page)?.edit.append(this.tableEd);
@@ -1064,9 +1064,9 @@ export class Editor {
         fontSize: P.fontSize, color: '#1a1a1a', border: P.stroke === '#d0342c' ? '#3a3f4b' : P.stroke, borderWidth: Math.min(P.width, 1.5), padding: 4, font: P.font,
         headerFill: s.head ? '#e9edf5' : undefined, headerBold: s.head,
       }]);
-      this.objEntry('표 넣기', ch);
+      this.objEntry('표 삽입', ch);
       if (!this.toolLock) this.setTool('select');
-      toast('표를 넣었습니다. 칸 글자는 “글자 고치기”로 나중에 고칠 수 있습니다.');
+      toast('표를 넣었습니다. 칸 글자는 “글자 수정”로 나중에 수정할 수 있습니다.');
     } catch (e: any) { toast('표를 넣지 못했습니다: ' + e.message); }
   }
 
@@ -1092,7 +1092,7 @@ export class Editor {
       const s = this.V.slots[page], vt = Math.max(0, (this.V.el.scrollTop - s.top) / this.V.zoom), vb = Math.min(p.h, (this.V.el.scrollTop + this.V.el.clientHeight - s.top) / this.V.zoom);
       const rect = { x: (p.w - w) / 2, y: Math.max(8, Math.min(p.h - hh - 8, (vt + vb) / 2 - hh / 2)), w, h: hh };
       const ch = await this.E.call<ObjChange>('addImage', [this.doc.id, key, { bytes, kind: jpg ? 'jpg' : 'png', ...rect }]);
-      this.objEntry('이미지 넣기', ch);
+      this.objEntry('이미지 삽입', ch);
       this.setTool('select');
       this.sel = { kind: 'obj', page, key, obj: { h: ch.added[0].h, type: 'image', rect } };
       this.paintPage(page); this.renderProps();
@@ -1109,7 +1109,7 @@ export class Editor {
     c.addEventListener('pointerup', () => drawing = false);
     const clear = h('button', { class: 'btn sm', type: 'button', onclick: () => { g.clearRect(0, 0, c.width, c.height); any = false; } }, '다시 그리기');
     const colors = h('div', { class: 'swatches' }, ...['#1b2a6b', '#1a1a1a', '#c0262d'].map(col => h('button', { class: 'sw', type: 'button', style: { background: col }, 'aria-label': '펜 색', onclick: () => { g.strokeStyle = col; } })));
-    const r = await dialog({ title: '서명 그리기', wide: true, body: h('div', { class: 'sign-wrap' }, c, h('div', { class: 'sign-tools' }, colors, clear)), buttons: [{ label: '취소', value: false }, { label: '서명 넣기', value: true, primary: true }] });
+    const r = await dialog({ title: '서명 그리기', wide: true, body: h('div', { class: 'sign-wrap' }, c, h('div', { class: 'sign-tools' }, colors, clear)), buttons: [{ label: '취소', value: false }, { label: '서명 삽입', value: true, primary: true }] });
     if (!r?.value || !any) return;
     // 여백 잘라내기
     const d = g.getImageData(0, 0, c.width, c.height).data;
@@ -1157,7 +1157,7 @@ export class Editor {
     if (v === null || v === a.contents) return;
     const key = this.sel?.kind === 'annot' && this.sel.annot.id === a.id ? this.sel.key : this.V.pages[a.page].key, id = this.doc.id, old = a.contents;
     await this.E.call('updateAnnot', [id, key, a.id, { contents: v }]);
-    this.push({ label: '주석 내용 고치기', keys: [key], undo: () => this.E.call('updateAnnot', [id, key, a.id, { contents: old }]), redo: () => this.E.call('updateAnnot', [id, key, a.id, { contents: v }]) });
+    this.push({ label: '주석 내용 수정', keys: [key], undo: () => this.E.call('updateAnnot', [id, key, a.id, { contents: old }]), redo: () => this.E.call('updateAnnot', [id, key, a.id, { contents: v }]) });
     this.changed(key); this.refreshAnnotList();
   }
   private listT = 0;
@@ -1176,7 +1176,7 @@ export class Editor {
     panel.append(h('div', { class: 'al-head' }, `주석 ${all.length}개`));
     let lastPage = -1;
     for (const a of all) {
-      if (a.page !== lastPage) { panel.append(h('div', { class: 'al-page' }, `${a.page + 1}쪽`)); lastPage = a.page; }
+      if (a.page !== lastPage) { panel.append(h('div', { class: 'al-page' }, `${a.page + 1}페이지`)); lastPage = a.page; }
       const d = /D:(\d{4})(\d{2})(\d{2})(\d{2})?(\d{2})?/.exec(a.modified);
       panel.append(h('div', { class: 'al-item', dataset: { id: String(a.id) } },
         h('button', { class: 'al-main', type: 'button', onclick: () => { this.V.scrollToRect(a.page, a.rect); this.setTab('annot'); this.setTool('aselect'); this.sel = { kind: 'annot', page: a.page, key: this.V.pages[a.page].key, annot: a }; this.paintPage(a.page); this.renderProps(); } },
@@ -1185,8 +1185,8 @@ export class Editor {
           h('span', { class: 'al-meta' }, [a.author, d ? `${d[2]}.${d[3]} ${d[4] || ''}:${d[5] || ''}` : ''].filter(Boolean).join(' · ')),
           a.contents ? h('span', { class: 'al-text' }, a.contents) : null),
         h('div', { class: 'al-act' },
-          h('button', { class: 'tb sm', type: 'button', title: '내용 고치기', 'aria-label': '내용 고치기', onclick: () => this.editAnnotContents(a) }, icon('edit')),
-          h('button', { class: 'tb sm', type: 'button', title: '지우기', 'aria-label': '지우기', onclick: async () => { this.sel = { kind: 'annot', page: a.page, key: this.V.pages[a.page].key, annot: a }; await this.deleteSel(); } }, icon('trash')))));
+          h('button', { class: 'tb sm', type: 'button', title: '내용 수정', 'aria-label': '내용 수정', onclick: () => this.editAnnotContents(a) }, icon('edit')),
+          h('button', { class: 'tb sm', type: 'button', title: '삭제', 'aria-label': '삭제', onclick: async () => { this.sel = { kind: 'annot', page: a.page, key: this.V.pages[a.page].key, annot: a }; await this.deleteSel(); } }, icon('trash')))));
     }
   }
   private highlightAnnotInList(id: number) {
@@ -1195,31 +1195,31 @@ export class Editor {
     const it = p.querySelector(`.al-item[data-id="${id}"]`); it?.classList.add('cur'); it?.scrollIntoView({ block: 'nearest' });
   }
 
-  /* ───────────── 쪽 다루기 ───────────── */
+  /* ───────────── 페이지 다루기 ───────────── */
   private targets() { return this.app.sidebar.targetPages(); }
-  /** scope: auto(고른 쪽이 있으면 그 쪽, 없으면 현재 쪽) / current / picked / all */
+  /** scope: auto(선택한 페이지가 있으면 그 페이지, 없으면 현재 페이지) / current / picked / all */
   async rotate(dir: number, scope: 'auto' | 'current' | 'picked' | 'all' = 'auto') {
     const all = this.V.pages.map(p => p.key);
     const keys = scope === 'all' ? all : scope === 'current' ? [all[this.V.current]] : scope === 'picked' ? all.filter(k => this.app.sidebar.selected.has(k)) : this.targets();
-    if (!keys.length) { toast('고른 쪽이 없습니다. 왼쪽 쪽 목록에서 Ctrl+클릭으로 고르세요.'); return; }
+    if (!keys.length) { toast('선택한 페이지가 없습니다. 왼쪽 페이지 목록에서 Ctrl+클릭으로 선택하세요.'); return; }
     const id = this.doc.id;
     for (const k of keys) await this.E.call('rotatePage', [id, k, dir]);
-    this.push({ label: '쪽 회전', keys, structural: true, undo: async () => { for (const k of keys) await this.E.call('rotatePage', [id, k, -dir]); }, redo: async () => { for (const k of keys) await this.E.call('rotatePage', [id, k, dir]); } });
+    this.push({ label: '페이지 회전', keys, structural: true, undo: async () => { for (const k of keys) await this.E.call('rotatePage', [id, k, -dir]); }, redo: async () => { for (const k of keys) await this.E.call('rotatePage', [id, k, dir]); } });
     await this.app.reloadPages(); keys.forEach(k => this.changed(k));
-    toast(`${keys.length === all.length ? '모든 쪽' : keys.length + '쪽'}을 ${dir > 0 ? '오른쪽' : '왼쪽'}으로 돌렸습니다.`, 1600);
+    toast(`${keys.length === all.length ? '모든 페이지' : keys.length + '페이지'}을 ${dir > 0 ? '오른쪽' : '왼쪽'}으로 돌렸습니다.`, 1600);
   }
-  /** 회전 단추: 범위 고르기 */
+  /** 회전 단추: 범위 선택 */
   private rotateMenu(ev: MouseEvent, dir: number) {
     const r = (ev.currentTarget as HTMLElement).getBoundingClientRect();
     const picked = this.app.sidebar.selected.size;
     const dirName = dir > 0 ? '오른쪽' : '왼쪽';
     menu({ x: r.left, y: r.bottom + 4 }, [
-      { label: `현재 쪽 (${this.V.current + 1}쪽) ${dirName}으로`, icon: dir > 0 ? 'rotR' : 'rotL', hint: dir > 0 ? 'Ctrl+]' : 'Ctrl+[', action: () => this.rotate(dir, 'current') },
-      { label: `고른 쪽 ${picked ? `(${picked}쪽)` : '— 쪽 목록에서 고르세요'}`, icon: dir > 0 ? 'rotR' : 'rotL', action: () => this.rotate(dir, 'picked'), disabled: !picked },
-      { label: `모든 쪽 (${this.V.pages.length}쪽) ${dirName}으로`, icon: dir > 0 ? 'rotR' : 'rotL', hint: dir > 0 ? 'Ctrl+Shift+]' : '', action: () => this.rotate(dir, 'all') },
+      { label: `현재 페이지 (${this.V.current + 1}페이지) ${dirName}으로`, icon: dir > 0 ? 'rotR' : 'rotL', hint: dir > 0 ? 'Ctrl+]' : 'Ctrl+[', action: () => this.rotate(dir, 'current') },
+      { label: `선택한 페이지 ${picked ? `(${picked}페이지)` : '— 페이지 목록에서 선택하세요'}`, icon: dir > 0 ? 'rotR' : 'rotL', action: () => this.rotate(dir, 'picked'), disabled: !picked },
+      { label: `모든 페이지 (${this.V.pages.length}페이지) ${dirName}으로`, icon: dir > 0 ? 'rotR' : 'rotL', hint: dir > 0 ? 'Ctrl+Shift+]' : '', action: () => this.rotate(dir, 'all') },
     ]);
   }
-  /** 여러 쪽을 한 자리(at: 옮기기 전 목록 기준 넣을 자리)로 옮긴다. 되돌리기는 한 번에 */
+  /** 여러 페이지를 한 자리(at: 옮기기 전 목록 기준 넣을 자리)로 옮긴다. 되돌리기는 한 번에 */
   async movePages(keys: number[], at: number) {
     const id = this.doc.id, order = this.V.pages.map(p => p.key), want = new Set(keys);
     const sel = order.filter(k => want.has(k));
@@ -1235,7 +1235,7 @@ export class Editor {
     }
     if (!moves.length) return;
     for (const m of moves) await this.E.call('movePage', [id, m.key, m.to]);
-    this.push({ label: sel.length > 1 ? `${sel.length}쪽 옮기기` : '쪽 옮기기', keys: [], structural: true,
+    this.push({ label: sel.length > 1 ? `${sel.length}페이지 옮기기` : '페이지 옮기기', keys: [], structural: true,
       undo: async () => { for (const m of [...moves].reverse()) await this.E.call('movePage', [id, m.key, m.from]); },
       redo: async () => { for (const m of moves) await this.E.call('movePage', [id, m.key, m.to]); } });
     await this.app.reloadPages(pos);
@@ -1243,33 +1243,33 @@ export class Editor {
   async insertBlank(atIndex?: number) {
     const id = this.doc.id, at = atIndex ?? this.V.current + 1, ref = this.V.pages[Math.min(Math.max(0, at - 1), this.V.pages.length - 1)];
     const key = await this.E.call<number>('insertBlank', [id, at, ref.w, ref.h]);
-    this.push({ label: '빈 쪽 넣기', keys: [], structural: true, undo: () => this.E.call('removePages', [id, [key]]), redo: () => this.E.call('insertBlank', [id, at, ref.w, ref.h, key]) });
+    this.push({ label: '빈 페이지 삽입', keys: [], structural: true, undo: () => this.E.call('removePages', [id, [key]]), redo: () => this.E.call('insertBlank', [id, at, ref.w, ref.h, key]) });
     await this.app.reloadPages(at);
-    toast(`${at + 1}쪽에 빈 쪽을 넣었습니다.`);
+    toast(`${at + 1}페이지에 빈 페이지를 넣었습니다.`);
   }
   async deletePages() {
     const keys = this.targets(), id = this.doc.id;
-    if (keys.length >= this.V.pages.length) { toast('모든 쪽을 지울 수는 없습니다.'); return; }
-    if (keys.length > 1 && !(await confirmBox('쪽 삭제', `${keys.length}쪽을 지울까요? Ctrl+Z로 되돌릴 수 있습니다.`, '지우기', true))) return;
+    if (keys.length >= this.V.pages.length) { toast('모든 페이지를 삭제할 수는 없습니다.'); return; }
+    if (keys.length > 1 && !(await confirmBox('페이지 삭제', `${keys.length}페이지를 삭제할까요? Ctrl+Z로 되돌릴 수 있습니다.`, '삭제', true))) return;
     if (this.editing) this.commitPending();
     const saved: { key: number; at: number; tmp: number }[] = [];
     const order = keys.map(k => ({ k, at: this.V.pages.findIndex(p => p.key === k) })).sort((a, b) => b.at - a.at);
     for (const { k, at } of order) saved.push({ key: k, at, tmp: await this.E.call<number>('deletePage', [id, k]) });
     const entry: Entry = {
-      label: '쪽 삭제', keys: [], structural: true,
+      label: '페이지 삭제', keys: [], structural: true,
       undo: async () => { for (const s of [...saved].reverse()) await this.E.call('restorePage', [id, s.key, s.at, s.tmp]); },
       redo: async () => { for (const s of saved) s.tmp = await this.E.call<number>('deletePage', [id, s.key]); },
     };
     this.push(entry);
     this.app.sidebar.selected.clear();
     await this.app.reloadPages();
-    toast(`${keys.length}쪽을 지웠습니다.`);
+    toast(`${keys.length}페이지를 지웠습니다.`);
   }
   async movePage(key: number, to: number) {
     const id = this.doc.id, from = this.V.pages.findIndex(p => p.key === key);
     if (from === to || from < 0) return;
     await this.E.call('movePage', [id, key, to]);
-    this.push({ label: '쪽 옮기기', keys: [], structural: true, undo: () => this.E.call('movePage', [id, key, from]), redo: () => this.E.call('movePage', [id, key, to]) });
+    this.push({ label: '페이지 옮기기', keys: [], structural: true, undo: () => this.E.call('movePage', [id, key, from]), redo: () => this.E.call('movePage', [id, key, to]) });
     await this.app.reloadPages(to);
   }
   async shiftPages(dir: number) {
@@ -1280,7 +1280,7 @@ export class Editor {
     const seq = dir < 0 ? idx : [...idx].reverse();
     for (const i of seq) await this.E.call('movePage', [id, this.V.pages[i].key, i + dir]);
     const moves = seq.map(i => ({ key: this.V.pages[i].key, from: i, to: i + dir }));
-    this.push({ label: '쪽 옮기기', keys: [], structural: true, undo: async () => { for (const m of [...moves].reverse()) await this.E.call('movePage', [id, m.key, m.from]); }, redo: async () => { for (const m of moves) await this.E.call('movePage', [id, m.key, m.to]); } });
+    this.push({ label: '페이지 옮기기', keys: [], structural: true, undo: async () => { for (const m of [...moves].reverse()) await this.E.call('movePage', [id, m.key, m.from]); }, redo: async () => { for (const m of moves) await this.E.call('movePage', [id, m.key, m.to]); } });
     await this.app.reloadPages(this.V.current + dir);
   }
   async imagePages(files?: File[], atIndex?: number) {
@@ -1288,7 +1288,7 @@ export class Editor {
     if (!files.length) return;
     const { loadImage } = await import('../tools.ts');
     const sel = h('select', { class: 'field' }, h('option', { value: 'a4' }, 'A4에 맞추기'), h('option', { value: 'image' }, '이미지 크기 그대로'));
-    const r = await dialog({ title: `이미지 ${files.length}장을 쪽으로 넣기`, body: h('div', { class: 'form' }, h('label', { class: 'lbl' }, '쪽 크기'), sel, h('p', { class: 'hint' }, `${(atIndex ?? this.V.current + 1) + 1}쪽 자리에 넣습니다.`)), buttons: [{ label: '취소', value: false }, { label: '넣기', value: true, primary: true }], collect: () => sel.value });
+    const r = await dialog({ title: `이미지 ${files.length}장을 페이지로 삽입`, body: h('div', { class: 'form' }, h('label', { class: 'lbl' }, '페이지 크기'), sel, h('p', { class: 'hint' }, `${(atIndex ?? this.V.current + 1) + 1}페이지 자리에 넣습니다.`)), buttons: [{ label: '취소', value: false }, { label: '삽입', value: true, primary: true }], collect: () => sel.value });
     if (!r?.value) return;
     const id = this.doc.id, at = atIndex ?? this.V.current + 1, mode = r.data;
     const specs: any[] = []; for (const f of files) { try { specs.push(await loadImage(f, f.name)); } catch { toast(`“${f.name}”은 읽을 수 없는 이미지입니다.`); } }
@@ -1296,9 +1296,9 @@ export class Editor {
     const cur = { keys: [] as number[] };
     const add = async () => { cur.keys = []; for (let i = 0; i < specs.length; i++) cur.keys.push(await this.E.call<number>('addImagePage', [id, at + i, specs[i], mode])); };
     await add();
-    this.push({ label: '이미지 쪽 넣기', keys: [], structural: true, undo: () => this.E.call('removePages', [id, cur.keys]), redo: add });
+    this.push({ label: '이미지 페이지 삽입', keys: [], structural: true, undo: () => this.E.call('removePages', [id, cur.keys]), redo: add });
     await this.app.reloadPages(at);
-    toast(`이미지 ${specs.length}장을 쪽으로 넣었습니다.`);
+    toast(`이미지 ${specs.length}장을 페이지로 넣었습니다.`);
   }
   async mergePdf(given?: { name: string; bytes: Uint8Array }[], atIndex?: number) {
     const files = given || await this.app.platform.pickPdfs(true);
@@ -1321,25 +1321,25 @@ export class Editor {
         toast(`“${f.name}”을 읽지 못했습니다.`); break;
       }
     }
-    if (total) { await this.app.reloadPages(start); toast(`${start + 1}쪽 자리에 ${total}쪽을 넣었습니다. Ctrl+Z로 되돌릴 수 있습니다.`); }
+    if (total) { await this.app.reloadPages(start); toast(`${start + 1}페이지 자리에 ${total}페이지를 넣었습니다. Ctrl+Z로 되돌릴 수 있습니다.`); }
   }
   async extract() {
     const keys = this.targets();
     const idx = keys.map(k => this.V.pages.findIndex(p => p.key === k)).sort((a, b) => a - b);
     const bytes = await this.E.call<Uint8Array>('extract', [this.doc.id, idx]);
-    const name = this.doc.name.replace(/\.pdf$/i, '') + `_${idx.length === 1 ? idx[0] + 1 + '쪽' : idx.length + '쪽'}.pdf`;
+    const name = this.doc.name.replace(/\.pdf$/i, '') + `_${idx.length === 1 ? idx[0] + 1 + '페이지' : idx.length + '페이지'}.pdf`;
     const t = await this.app.platform.saveAs(name, bytes);
-    if (t) toast(`${idx.length}쪽을 “${t.name}”로 저장했습니다.`);
+    if (t) toast(`${idx.length}페이지를 “${t.name}”로 저장했습니다.`);
   }
   thumbMenu(e: MouseEvent, _i: number) {
     const n = this.targets().length;
     menu({ x: e.clientX, y: e.clientY }, [
-      { label: `${n}쪽 왼쪽으로 회전`, icon: 'rotL', hint: 'Ctrl+[', action: () => this.rotate(-1) },
-      { label: `${n}쪽 오른쪽으로 회전`, icon: 'rotR', hint: 'Ctrl+]', action: () => this.rotate(1) },
-      { label: '모든 쪽 오른쪽으로 회전', icon: 'rotR', action: () => this.rotate(1, 'all') },
-      { label: '뒤에 빈 쪽 넣기', icon: 'pageAdd', action: () => this.insertBlank() },
-      { label: `${n}쪽 뽑아내기…`, icon: 'extract', action: () => this.extract() }, '-',
-      { label: `${n}쪽 지우기`, icon: 'trash', action: () => this.deletePages() },
+      { label: `${n}페이지 왼쪽으로 회전`, icon: 'rotL', hint: 'Ctrl+[', action: () => this.rotate(-1) },
+      { label: `${n}페이지 오른쪽으로 회전`, icon: 'rotR', hint: 'Ctrl+]', action: () => this.rotate(1) },
+      { label: '모든 페이지 오른쪽으로 회전', icon: 'rotR', action: () => this.rotate(1, 'all') },
+      { label: '뒤에 빈 페이지 삽입', icon: 'pageAdd', action: () => this.insertBlank() },
+      { label: `${n}페이지 추출…`, icon: 'extract', action: () => this.extract() }, '-',
+      { label: `${n}페이지 삭제`, icon: 'trash', action: () => this.deletePages() },
     ]);
   }
 
@@ -1392,13 +1392,13 @@ export class Editor {
     }
   }
   private async ocrDialog() {
-    const sel = h('select', { class: 'field' }, h('option', { value: 'cur' }, `현재 쪽 (${this.V.current + 1}쪽)`), h('option', { value: 'empty' }, '글자가 없는 쪽 모두 (스캔 쪽)'), h('option', { value: 'all' }, '모든 쪽'));
-    const r = await dialog({ title: '글자 인식 (OCR)', body: h('div', { class: 'form' }, h('p', {}, '스캔한 쪽의 글자를 한국어·영어로 인식해 보이지 않는 글자층으로 얹습니다. 모양은 그대로이고, 저장하면 다른 프로그램에서도 검색·복사가 됩니다. 인식은 이 컴퓨터 안에서만 합니다.'), h('label', { class: 'lbl' }, '대상'), sel), buttons: [{ label: '취소', value: false }, { label: '인식 시작', value: true, primary: true }], collect: () => sel.value });
+    const sel = h('select', { class: 'field' }, h('option', { value: 'cur' }, `현재 페이지 (${this.V.current + 1}페이지)`), h('option', { value: 'empty' }, '글자가 없는 페이지 모두 (스캔 페이지)'), h('option', { value: 'all' }, '모든 페이지'));
+    const r = await dialog({ title: '글자 인식 (OCR)', body: h('div', { class: 'form' }, h('p', {}, '스캔한 페이지의 글자를 한국어·영어로 인식해 보이지 않는 글자층으로 얹습니다. 모양은 그대로이고, 저장하면 다른 프로그램에서도 검색·복사가 됩니다. 인식은 이 컴퓨터 안에서만 합니다.'), h('label', { class: 'lbl' }, '대상'), sel), buttons: [{ label: '취소', value: false }, { label: '인식 시작', value: true, primary: true }], collect: () => sel.value });
     if (!r?.value) return;
     const which = r.data as string;
     const id = this.doc.id;
     const pages = which === 'cur' ? [this.V.current] : this.V.pages.map((_, i) => i);
-    const keysAt = this.V.pages.map(p => p.key); // 도중에 다른 탭으로 가도 이 문서의 쪽에 넣는다
+    const keysAt = this.V.pages.map(p => p.key); // 도중에 다른 탭으로 가도 이 문서의 페이지에 넣는다
     const b = busy('글자 인식 엔진을 준비하는 중…');
     let cancelled = false;
     const cancelBtn = h('button', { class: 'btn sm', type: 'button', onclick: () => { cancelled = true; } }, '그만');
@@ -1419,7 +1419,7 @@ export class Editor {
         redo: async () => { for (const c of changes) await this.E.call('attach', [id, c.key, c.gen, c.added]); },
       });
     }
-    toast(done ? `${done}쪽에서 낱말 ${words}개를 인식했습니다. 이제 찾기(Ctrl+F)로 검색됩니다.` : '인식할 쪽이 없었습니다 (이미 글자가 있는 쪽은 건너뜁니다).', 5000);
+    toast(done ? `${done}페이지에서 낱말 ${words}개를 인식했습니다. 이제 찾기(Ctrl+F)로 검색됩니다.` : '인식할 페이지가 없었습니다 (이미 글자가 있는 페이지는 건너뜁니다).', 5000);
   }
   private async setPassword() {
     const a = h('input', { class: 'field', type: 'password', autocomplete: 'new-password', 'aria-label': '새 암호' });
@@ -1481,17 +1481,17 @@ export class Editor {
     if (run || obj) this.sel = run ? { kind: 'run', page, key, run } : { kind: 'obj', page, key, obj: obj! };
     this.paintPage(page); this.renderProps();
     menu({ x: e.clientX, y: e.clientY }, [
-      ...(run ? [{ label: '이 글자 고치기', icon: 'editText' as IconName, hint: 'Enter', action: () => this.openRunEditor(page, run) }] : []),
+      ...(run ? [{ label: '이 글자 수정', icon: 'editText' as IconName, hint: 'Enter', action: () => this.openRunEditor(page, run) }] : []),
       ...(run || obj ? [
         { label: '맨 앞으로 가져오기', icon: 'front' as IconName, action: () => this.arrange('front') },
         { label: '앞으로 가져오기', icon: 'up' as IconName, action: () => this.arrange('forward') },
         { label: '뒤로 보내기', icon: 'down' as IconName, action: () => this.arrange('backward') },
         { label: '맨 뒤로 보내기', icon: 'back' as IconName, action: () => this.arrange('back') }, '-' as const,
-        { label: '지우기', icon: 'trash' as IconName, hint: 'Delete', action: () => this.deleteSel() }, '-' as const] : []),
+        { label: '삭제', icon: 'trash' as IconName, hint: 'Delete', action: () => this.deleteSel() }, '-' as const] : []),
       { label: '여기에 글자 추가', icon: 'addText', action: () => this.openNewTextEditor(page, x, y - this.props.fontSize * 0.7) },
       { label: '여기에 메모 붙이기', icon: 'note', action: () => this.placeNote(page, x, y) },
-      { label: '이미지 넣기…', icon: 'image', action: () => this.pickImage() },
-      { label: '서명 넣기…', icon: 'pen', action: () => this.signature() }, '-',
+      { label: '이미지 삽입…', icon: 'image', action: () => this.pickImage() },
+      { label: '서명 삽입…', icon: 'pen', action: () => this.signature() }, '-',
       { label: '보기 모드로', icon: 'view', hint: 'Ctrl+E', action: () => this.app.setMode('view') },
     ]);
     return true;

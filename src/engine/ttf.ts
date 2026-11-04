@@ -133,7 +133,7 @@ export class TTF {
     this.cache.set(cp, out);
     return out;
   }
-  /** 글자들을 PDF 경로 연산자로 (x,y: 기준선 시작점, 쪽 좌표) */
+  /** 글자들을 PDF 경로 연산자로 (x,y: 기준선 시작점, 페이지 좌표) */
   pdfPath(text: string, size: number, x: number, y: number) {
     const k = size / this.unitsPerEm, r = (n: number) => (Math.round(n * 100) / 100).toString();
     let out = '', cx = x;

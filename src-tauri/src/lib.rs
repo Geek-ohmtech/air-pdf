@@ -18,30 +18,41 @@ struct Batch {
 #[derive(Default)]
 struct Inbox {
     ready: bool,
-    batch: Batch,
+    /// 일의 종류(열기·합치기…)가 다르면 따로 모은다
+    batches: Vec<Batch>,
 }
 #[derive(Default)]
 struct Pending(Mutex<Inbox>);
 
 impl Inbox {
     fn add(&mut self, b: Batch) {
-        if self.batch.mode.is_none() {
-            self.batch.mode = b.mode;
+        if b.files.is_empty() {
+            return;
         }
-        for f in b.files {
-            if !self.batch.files.contains(&f) {
-                self.batch.files.push(f);
+        match self.batches.iter_mut().find(|x| x.mode == b.mode) {
+            Some(x) => {
+                for f in b.files {
+                    if !x.files.contains(&f) {
+                        x.files.push(f);
+                    }
+                }
             }
+            None => self.batches.push(b),
         }
     }
 }
 
 /// 화면이 이벤트를 받을 준비가 된 뒤 한 번 부른다: 그동안 모인 파일을 돌려주고, 다음부터는 "open-files" 이벤트로 보낸다
 #[tauri::command]
-fn initial_files(pending: State<Pending>) -> Batch {
+fn initial_files(app: tauri::AppHandle, pending: State<Pending>) -> Batch {
     let mut p = pending.0.lock().unwrap();
     p.ready = true;
-    std::mem::take(&mut p.batch)
+    let mut list = std::mem::take(&mut p.batches);
+    let first = if list.is_empty() { Batch::default() } else { list.remove(0) };
+    for b in list {
+        let _ = app.emit("open-files", b); // 나머지 종류는 이벤트로 (화면은 이미 받을 준비가 됐다)
+    }
+    first
 }
 
 /// 다른 실행(또는 macOS Finder)에서 넘어온 파일: 화면이 준비됐으면 바로 보내고, 아니면 모아 둔다
@@ -186,6 +197,30 @@ mod winassoc {
         ra.set_value("AirPDF", &r"Software\AirPDF\Capabilities")?;
         Ok(())
     }
+    /// 탐색기 미리보기 창·미리보기 그림: 이 컴퓨터에 있는 PDF 미리보기(보통 Edge)를 Air PDF 파일 형식에도 붙인다.
+    /// 기본 프로그램을 Air PDF로 바꾸면 Windows가 Air PDF 쪽 등록만 보고 미리보기를 못 찾는 일을 막는다.
+    pub fn ensure_preview() {
+        const HANDLERS: [&str; 2] = [
+            "{8895b1c6-b41f-4c1c-a562-0d564250836f}", // 미리보기 창 (IPreviewHandler)
+            "{e357fccd-a995-4576-b01f-234630154e96}", // 미리보기 그림 (IThumbnailProvider)
+        ];
+        let hkcr = RegKey::predef(HKEY_CLASSES_ROOT);
+        let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+        // 찾아볼 곳: 확장자, Edge, 아크로뱃, 그리고 .pdf를 열 수 있다고 등록한 다른 프로그램들
+        let mut sources: Vec<String> = vec![".pdf".into(), "SystemFileAssociations\\.pdf".into(), "MSEdgePDF".into(), "AcroExch.Document.DC".into(), "AcroExch.Document".into()];
+        if let Ok(k) = hkcr.open_subkey(".pdf\\OpenWithProgids") {
+            for (name, _) in k.enum_values().flatten() { if name != PROGID { sources.push(name); } }
+        }
+        if let Ok(pid) = hkcr.open_subkey(".pdf").and_then(|k| k.get_value::<String, _>("")) { if pid != PROGID { sources.push(pid); } }
+        for h in HANDLERS {
+            let target = format!(r"Software\Classes\{PROGID}\shellex\{h}");
+            if hkcu.open_subkey(&target).and_then(|k| k.get_value::<String, _>("")).map(|v| !v.is_empty()).unwrap_or(false) { continue; }
+            let found = sources.iter().find_map(|src| hkcr.open_subkey(format!(r"{src}\shellex\{h}")).and_then(|k| k.get_value::<String, _>("")).ok().filter(|v| !v.is_empty()));
+            if let Some(clsid) = found {
+                if let Ok((k, _)) = hkcu.create_subkey(&target) { let _ = k.set_value("", &clsid); }
+            }
+        }
+    }
     pub fn is_default() -> bool {
         let hkcu = RegKey::predef(HKEY_CURRENT_USER);
         hkcu.open_subkey(r"Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.pdf\UserChoice")
@@ -211,6 +246,7 @@ fn make_default_app() -> Result<(), String> {
     {
         use std::os::windows::process::CommandExt;
         winassoc::register().map_err(|e| e.to_string())?;
+        winassoc::ensure_preview();
         unsafe { SHChangeNotify(0x0800_0000, 0, std::ptr::null(), std::ptr::null()) };
         std::process::Command::new("cmd")
             .args(["/C", "start", "", "ms-settings:defaultapps?registeredAppUser=AirPDF"])
@@ -280,7 +316,17 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
-        .manage(Pending(Mutex::new(Inbox { ready: false, batch: parse_args(std::env::args().skip(1)) })))
+        .manage(Pending(Mutex::new({
+            let mut i = Inbox::default();
+            i.add(parse_args(std::env::args().skip(1)));
+            i
+        })))
+        .setup(|_app| {
+            // 탐색기 미리보기 연결은 켤 때마다 확인한다 (빠르고, 이미 있으면 건드리지 않음)
+            #[cfg(windows)]
+            std::thread::spawn(winassoc::ensure_preview);
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             initial_files,
             read_file,
@@ -315,8 +361,10 @@ mod tests {
         let mut i = Inbox::default();
         i.add(Batch { mode: Some("merge".into()), files: vec!["a.pdf".into()] });
         i.add(Batch { mode: Some("merge".into()), files: vec!["b.pdf".into(), "a.pdf".into()] });
-        assert_eq!(i.batch.mode.as_deref(), Some("merge"));
-        assert_eq!(i.batch.files, vec!["a.pdf".to_string(), "b.pdf".to_string()]);
+        i.add(Batch { mode: None, files: vec!["c.pdf".into()] });
+        assert_eq!(i.batches.len(), 2, "열기와 합치기는 따로");
+        assert_eq!(i.batches[0].mode.as_deref(), Some("merge"));
+        assert_eq!(i.batches[0].files, vec!["a.pdf".to_string(), "b.pdf".to_string()]);
     }
     fn v(a: &[&str]) -> Vec<String> { a.iter().map(|s| s.to_string()).collect() }
     #[test]

@@ -1,4 +1,4 @@
-/** 문서 보정 화면: 모서리 맞추기 · 회전 · 보정 방식 고르기 · 미리보기 */
+/** 문서 보정 화면: 모서리 맞추기 · 회전 · 보정 방식 선택 · 미리보기 */
 import { dialog, h, icon } from '../ui/dom.ts';
 import { detectQuad, process, toCanvas, type Mode, type Quad } from './scan.ts';
 

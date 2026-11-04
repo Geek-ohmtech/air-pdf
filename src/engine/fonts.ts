@@ -41,7 +41,7 @@ export class FontKit {
     this.src = src;
     for (const f of BUILTIN_FONTS) this.fonts.set(f.id, { bytes: null, index: 0, file: f.file });
   }
-  /** 컴퓨터에 설치된 글꼴 등록 (TTC면 index로 얼굴 고르기) */
+  /** 컴퓨터에 설치된 글꼴 등록 (TTC면 index로 얼굴 선택) */
   register(id: string, bytes: Uint8Array, index = 0) { this.fonts.set(id, { bytes, index }); }
   has(id: string) { const f = this.fonts.get(id); return !!f && (!!f.bytes || !!f.file); }
 

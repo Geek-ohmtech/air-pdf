@@ -1,4 +1,4 @@
-/** 색 고르기 단추: 지금 색을 보여 주고, 누르면 엑셀처럼 색표가 펼쳐진다 */
+/** 색 선택 단추: 지금 색을 보여 주고, 누르면 엑셀처럼 색표가 펼쳐진다 */
 import { h } from './dom.ts';
 
 const THEME = ['#ffffff', '#1a1a1a', '#7f7f7f', '#2b59c3', '#d0342c', '#e07b00', '#ffd400', '#1f8a4c', '#7b3fbf', '#79c7ff'];
@@ -7,7 +7,7 @@ const RECENT_KEY = 'airpdf.recentColors';
 
 const hex = (n: number) => Math.round(Math.max(0, Math.min(255, n))).toString(16).padStart(2, '0');
 const rgb = (c: string) => [1, 3, 5].map(i => parseInt(c.slice(i, i + 2), 16));
-/** t > 0: 흰색 쪽으로, t < 0: 검은색 쪽으로 */
+/** t > 0: 흰색 페이지로, t < 0: 검은색 페이지로 */
 const mix = (c: string, t: number) => '#' + rgb(c).map(v => hex(t > 0 ? v + (255 - v) * t : v * (1 + t))).join('');
 const variants = (c: string) => {
   const lum = rgb(c).reduce((a, v) => a + v, 0) / 765;
@@ -42,7 +42,7 @@ function showPalette(btn: HTMLButtonElement, o: ColorOpts) {
   const sw = (c: string) => h('button', { class: 'sw' + (c.toLowerCase() === (o.value || '').toLowerCase() ? ' cur' : ''), type: 'button', style: { background: c }, title: c, 'aria-label': '색 ' + c, onclick: () => pick(c) });
   const grid = (cols: string[][]) => h('div', { class: 'cp-grid' }, ...cols.flat().map(sw));
   const themeRows: string[][] = [THEME, ...[0, 1, 2, 3, 4].map(i => THEME.map(c => mix(c, variants(c)[i])))];
-  const custom = h('input', { type: 'color', class: 'cp-custom', value: o.value || '#000000', 'aria-label': '다른 색 고르기' }) as HTMLInputElement;
+  const custom = h('input', { type: 'color', class: 'cp-custom', value: o.value || '#000000', 'aria-label': '다른 색 선택' }) as HTMLInputElement;
   custom.addEventListener('change', () => pick(custom.value));
   const rec = recent();
   const pop = h('div', { class: 'color-pop', role: 'dialog', 'aria-label': o.title },

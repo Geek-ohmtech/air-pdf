@@ -42,7 +42,7 @@ async function boot(b: string) {
   });
   engine = new PdfEngine(P, kit);
   engine.onEvict = (docId, key) => (self as any).postMessage({ event: 'evict', docId, key });
-  // 글꼴을 넣지 않은 한글 PDF가 많아서, 대체 글꼴은 엔진이 준비된 뒤 미리 읽어 둔다 (첫 쪽 그리기가 멈추지 않게)
+  // 글꼴을 넣지 않은 한글 PDF가 많아서, 대체 글꼴은 엔진이 준비된 뒤 미리 읽어 둔다 (첫 페이지 그리기가 멈추지 않게)
   setTimeout(() => { if (!fontBytes) fetch(vendor(FONT)).then(r => r.ok ? r.arrayBuffer() : null).then(b => { if (b && !fontBytes) fontBytes = new Uint8Array(b); }).catch(() => {}); }, 150);
 }
 

@@ -28,7 +28,7 @@ const ANNOT_NAMES: Record<number, string> = {
 
 interface PageCtx {
   key: number;
-  pinned?: boolean;      // 편집기가 이 쪽 객체 번호를 기억하고 있음 (되도록 닫지 않는다)
+  pinned?: boolean;      // 편집기가 이 페이지 객체 번호를 기억하고 있음 (되도록 닫지 않는다)
   page: number;          // FPDF_PAGE
   text: number;          // FPDF_TEXTPAGE (0 = 아직 없음)
   m: M6;                 // page → display (pt)
@@ -171,7 +171,7 @@ export class PdfEngine {
     if (pc) { pc.used = performance.now(); return pc; }
     const index = d.keys.indexOf(key);
     const page = this.P.FPDF_LoadPage(d.doc, index);
-    if (!page) throw new Error(`${index + 1}쪽을 읽지 못했습니다`);
+    if (!page) throw new Error(`${index + 1}페이지를 읽지 못했습니다`);
     pc = { key, page, text: 0, dirty: false, used: performance.now(), ...this.geometry(page) };
     if (d.form) { this.P.FORM_OnAfterLoadPage(page, d.form.handle); pc.form = d.form.handle; }
     d.pages.set(key, pc);
@@ -179,7 +179,7 @@ export class PdfEngine {
     return pc;
   }
   private page(d: DocCtx, index: number) { return this.pageByKey(d, this.keyAt(d, index)); }
-  /** 메모리를 아끼려고 오래 안 쓴 깨끗한 쪽을 닫는다. 편집기가 객체를 기억하는 쪽(pinned)은 64쪽까지 남기고, 닫으면 알린다 */
+  /** 메모리를 아끼려고 오래 안 쓴 깨끗한 페이지를 닫는다. 편집기가 객체를 기억하는 페이지(pinned)은 64페이지까지 남기고, 닫으면 알린다 */
   onEvict: ((docId: number, key: number) => void) | null = null;
   private evict(d: DocCtx) {
     if (d.pages.size <= 24) return;
@@ -189,19 +189,19 @@ export class PdfEngine {
       if (extra <= 0) break;
       if (pc.pinned && d.pages.size <= 64) break;
       this.closePage(pc); d.pages.delete(pc.key); extra--;
-      d.gen.set(pc.key, this.gen(d, pc.key) + 1); // 그 쪽의 옛 객체 번호는 더 이상 쓰면 안 된다
+      d.gen.set(pc.key, this.gen(d, pc.key) + 1); // 그 페이지의 옛 객체 번호는 더 이상 쓰면 안 된다
       if (pc.pinned) this.onEvict?.(d.id, pc.key);
     }
   }
   /**
-   * 넘어온 객체 번호가 정말 이 쪽(또는 쪽 안의 양식)에 있는지 확인한다.
-   * 닫혔다 다시 열린 쪽이나 다른 쪽·다른 문서의 번호로 고치면 엔진 메모리가 망가지므로 미리 막는다.
+   * 넘어온 객체 번호가 정말 이 페이지(또는 페이지 안의 양식)에 있는지 확인한다.
+   * 닫혔다 다시 열린 페이지나 다른 페이지·다른 문서의 번호로 고치면 엔진 메모리가 망가지므로 미리 막는다.
    */
   private assertOwned(pc: PageCtx, objs: number[]) {
     if (!objs.length) return;
     const own = new Set<number>();
     this.walk(pc, o => { own.add(o); }, false);
-    if (objs.some(o => !own.has(o))) throw new Error('고른 내용이 바뀌었습니다. 다시 골라 주세요');
+    if (objs.some(o => !own.has(o))) throw new Error('선택한 내용이 바뀌었습니다. 다시 선택해 주세요');
   }
   private closePage(pc: PageCtx) {
     if (pc.text) this.P.FPDFText_ClosePage(pc.text);
@@ -262,7 +262,7 @@ export class PdfEngine {
     } : { x: 0, y: 0, w: fullW, h: fullH };
     const bm = this.P.FPDFBitmap_Create(rg.w, rg.h, 1);
     this.P.FPDFBitmap_FillRect(bm, 0, 0, rg.w, rg.h, 0xffffffff);
-    // PDFium은 쪽의 기본 화면 행렬(뒤집기·회전, 정수 크기)을 먼저 적용한 뒤 이 행렬을 곱한다
+    // PDFium은 페이지의 기본 화면 행렬(뒤집기·회전, 정수 크기)을 먼저 적용한 뒤 이 행렬을 곱한다
     const sx = (fullW / pc.w) * (pc.w / Math.max(1, Math.trunc(pc.w))), sy = (fullH / pc.h) * (pc.h / Math.max(1, Math.trunc(pc.h)));
     const m: M6 = [sx, 0, 0, sy, -rg.x, -rg.y];
     const mp = this.malloc(24), cp = this.malloc(16);
@@ -465,7 +465,7 @@ export class PdfEngine {
     return out;
   }
   /**
-   * 입력란 값 바꾸기. value: 글자(글자칸·콤보), true/false(확인란·단일 선택), 고른 번호들(목록)
+   * 입력란 값 바꾸기. value: 글자(글자칸·콤보), true/false(확인란·단일 선택), 선택한 번호들(목록)
    * 한글처럼 기본 글꼴(Helvetica)에 없는 글자가 있으면, 입력란 모양을 글자 윤곽선(벡터)으로 직접 그려 넣는다
    * → 이 앱, 다른 PDF 프로그램, 인쇄 어디서나 한글이 보인다. 값(/V)은 그대로 진짜 글자로 저장된다.
    */
@@ -638,7 +638,7 @@ export class PdfEngine {
     return true;
   }
   /**
-   * 주석 지우기/되살리기. 바로 지우지 않고 숨겨 두었다가(되돌리기 가능) 저장할 때 실제로 뺀다.
+   * 주석 삭제/되살리기. 바로 지우지 않고 숨겨 두었다가(되돌리기 가능) 저장할 때 실제로 뺀다.
    */
   setAnnotRemoved(docId: number, key: number, id: number, removed: boolean) {
     const d = this.D(docId); const pc = this.pageByKey(d, key);
@@ -671,7 +671,7 @@ export class PdfEngine {
     const p1 = this.toPage(pc, rect.x, rect.y), p2 = this.toPage(pc, rect.x + rect.w, rect.y + rect.h);
     const L = Math.min(p1[0], p2[0]), R = Math.max(p1[0], p2[0]), B = Math.min(p1[1], p2[1]), T = Math.max(p1[1], p2[1]);
     const hit = (b: number[] | null) => !!b && b[0] < R && b[2] > L && b[1] < T && b[3] > B;
-    // 양식 안 글자는 먼저 쪽으로 꺼낸다
+    // 양식 안 글자는 먼저 페이지로 꺼낸다
     const nested: number[] = [];
     this.walk(pc, (o, t, fm) => { if (t === OBJ_TEXT && fm) { const b = this.objBounds(o); if (b && hit(this.mapBounds(b, fm))) nested.push(o); } });
     this.liftObjs(d, pc, nested);
@@ -761,7 +761,7 @@ export class PdfEngine {
       if (t !== OBJ_TEXT) return;
       const text = this.objText(o, tp);
       if (!text || !text.trim()) return;
-      if (!fm && this.P.FPDFPageObj_CountMarks(o) && this.metaOf(o)?.t === 'tb') return; // 글상자 글자는 글상자로 고친다
+      if (!fm && this.P.FPDFPageObj_CountMarks(o) && this.metaOf(o)?.t === 'tb') return; // 글상자 글자는 글상자로 수정한다
       let b = this.objBounds(o); if (!b) return;
       let m = this.objMatrix(o);
       if (fm) { m = mul(m, fm); b = this.mapBounds(b, fm); }
@@ -808,7 +808,7 @@ export class PdfEngine {
     }
     return runs;
   }
-  /** 표의 세로줄 (쪽 좌표). 글자 줄을 칸마다 나누는 데 쓴다 */
+  /** 표의 세로줄 (페이지 좌표). 글자 줄을 칸마다 나누는 데 쓴다 */
   private verticalRules(pc: PageCtx) {
     const rules: { x: number; y0: number; y1: number }[] = [];
     let budget = 40000;
@@ -922,7 +922,7 @@ export class PdfEngine {
       const dy = i * vs * 1.25;
       let ox = m[4] - ux * dy, oy = m[5] - uy * dy;
       if (pieceFonts) {
-        // 글자마다 그 글자가 든 조각 글꼴을 골라 이어 붙인다. 앞으로 나아가는 거리는 정확히 잰다
+        // 글자마다 그 글자가 든 조각 글꼴을 선택해 이어 붙인다. 앞으로 나아가는 거리는 정확히 잰다
         const pf = pieceFonts;
         const pieces: { font: number; text: string }[] = [];
         for (const ch of line) {
@@ -966,7 +966,7 @@ export class PdfEngine {
   }
   /** 글꼴 이름 (부분 글꼴 접두어·Regular 떼고) */
   private baseFontName(f: number) { return this.fontName(f).replace(/^[A-Z]{6}\+/, '').replace(/[,-](Regular|Roman|Normal)$/i, ''); }
-  /** 쪽에 쓰인 글꼴마다 그 글꼴로 그린 글자 모음 */
+  /** 페이지에 쓰인 글꼴마다 그 글꼴로 그린 글자 모음 */
   private fontCharMap(pc: PageCtx) {
     const tp = this.textPage(pc), map = new Map<number, Set<string>>();
     this.walk(pc, (o, t) => { if (t !== OBJ_TEXT) return; const f = this.P.FPDFTextObj_GetFont(o); let set = map.get(f); if (!set) { set = new Set(); map.set(f, set); } for (const ch of this.objText(o, tp)) set.add(ch); }, false);
@@ -1011,7 +1011,7 @@ export class PdfEngine {
   hasFont(id: string) { return this.fonts.has(id); }
 
   /* ───────────── 양식(Form XObject) 안의 객체 ───────────── */
-  /** 쪽의 객체를 양식 안까지 훑는다. fm: 그 객체가 든 양식 공간 → 쪽 공간 행렬 (쪽에 바로 있으면 null) */
+  /** 페이지의 객체를 양식 안까지 훑는다. fm: 그 객체가 든 양식 공간 → 페이지 공간 행렬 (페이지에 바로 있으면 null) */
   private walk(pc: PageCtx, fn: (o: number, type: number, fm: M6 | null) => void, record = true) {
     if (record) pc.nested = new Map();
     const n = this.P.FPDFPage_CountObjects(pc.page);
@@ -1059,7 +1059,7 @@ export class PdfEngine {
     }
     return { o, parent, fm };
   }
-  /** 양식 안 객체를 양식에서 꺼내 쪽에 바로 놓는다. 모양과 글꼴은 그대로. */
+  /** 양식 안 객체를 양식에서 꺼내 페이지에 바로 놓는다. 모양과 글꼴은 그대로. */
   private liftOne(pc: PageCtx, o: number, parent: number, fm: M6, top: number) {
     const m = this.objMatrix(o);
     if (!this.P.FPDFFormObj_RemoveObject(parent, o)) return false;
@@ -1071,9 +1071,9 @@ export class PdfEngine {
     return true;
   }
   /**
-   * 고칠 객체 가운데 양식 안에 든 것을 꺼낸다.
-   * 양식 스트림은 여러 쪽(또는 한 쪽의 여러 곳)이 함께 쓸 수 있어서, 같은 양식을 쓰는 다른 곳에서도
-   * 같은 객체를 함께 꺼내야 그쪽 글자가 사라지지 않는다. 돌려주는 값: 함께 바뀐 다른 쪽의 키
+   * 수정할 객체 가운데 양식 안에 든 것을 꺼낸다.
+   * 양식 스트림은 여러 페이지(또는 한 페이지의 여러 곳)이 함께 쓸 수 있어서, 같은 양식을 쓰는 다른 곳에서도
+   * 같은 객체를 함께 꺼내야 그쪽 글자가 사라지지 않는다. 돌려주는 값: 함께 바뀐 다른 페이지의 키
    */
   private liftObjs(d: DocCtx, pc: PageCtx, objs: number[]): number[] {
     if (!pc.nested || !objs.some(o => pc.nested!.has(o))) return [];
@@ -1108,7 +1108,7 @@ export class PdfEngine {
   }
   /**
    * 겹친 순서 바꾸기. front 맨 앞 / back 맨 뒤 / forward 한 단계 앞 / backward 한 단계 뒤.
-   * 한 단계는 고른 것과 겹치는 바로 위(아래) 객체를 넘는다. 돌려주는 값은 되돌리기용 원래 자리.
+   * 한 단계는 선택한 것과 겹치는 바로 위(아래) 객체를 넘는다. 돌려주는 값은 되돌리기용 원래 자리.
    */
   reorder(docId: number, key: number, objs: number[], how: 'front' | 'back' | 'forward' | 'backward') {
     const d = this.D(docId); const pc = this.pageByKey(d, key); this.assertOwned(pc, objs);
@@ -1143,7 +1143,7 @@ export class PdfEngine {
     this.touch(pc);
     return true;
   }
-  /** 객체 지우기(떼어 두기) */
+  /** 객체 삭제(떼어 두기) */
   removeObjs(docId: number, key: number, objs: number[]): ObjChange {
     const d = this.D(docId); const pc = this.pageByKey(d, key); this.assertOwned(pc, objs);
     const also = this.liftObjs(d, pc, objs);
@@ -1227,7 +1227,7 @@ export class PdfEngine {
     return out;
   }
 
-  /** 새 글자 넣기. x,y: 첫 줄 글자 상자의 왼쪽 위(화면 pt) */
+  /** 새 글자 삽입. x,y: 첫 줄 글자 상자의 왼쪽 위(화면 pt) */
   async addText(docId: number, key: number, spec: { x: number; y: number; text: string; size: number; color: string; bold?: boolean; invisible?: boolean; widthFit?: number; font?: string }): Promise<ObjChange> {
     const d = this.D(docId); const pc = this.pageByKey(d, key);
     const lines = spec.text.replace(/\r/g, '').split('\n');
@@ -1305,7 +1305,7 @@ export class PdfEngine {
     this.P.FPDFPage_InsertObject(pc.page, path);
     return path;
   }
-  /* ───────────── Air PDF 표시(marked content): 도형·글상자·자유선을 저장 뒤에도 다시 고치기 위해 ───────────── */
+  /* ───────────── Air PDF 표시(marked content): 도형·글상자·자유선을 저장 뒤에도 다시 수정 위해 ───────────── */
   private setObjMeta(d: DocCtx, o: number, spec: any) {
     const mk = this.P.FPDFPageObj_AddMark(o, 'AirPDF');
     // 한글이 PDF 문자열에서 깨지지 않게 ASCII로만 적는다
@@ -1436,7 +1436,7 @@ export class PdfEngine {
     return { key, gen: this.gen(d, key), removed, added: [{ h: path, idx: removed[0].idx }], substituted: false };
   }
 
-  /** 글상자: 테두리·배경(벡터) + 폭에 맞춰 줄 바꾼 진짜 글자. 모두 같은 묶음 번호로 표시해 나중에 통째로 고친다 */
+  /** 글상자: 테두리·배경(벡터) + 폭에 맞춰 줄 바꾼 진짜 글자. 모두 같은 묶음 번호로 표시해 나중에 통째로 수정한다 */
   async addTextBox(docId: number, key: number, spec: TextBoxSpec, at?: number): Promise<ObjChange & { rect: Rect }> {
     const d = this.D(docId); const pc = this.pageByKey(d, key);
     const g = spec.g || 'tb' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
@@ -1493,7 +1493,7 @@ export class PdfEngine {
     this.touch(pc);
     return { key, gen: this.gen(d, key), removed: [], added, substituted: true, rect };
   }
-  /** 글상자 고치기: 이전 묶음을 떼어 두고 새로 만든다 */
+  /** 글상자 수정: 이전 묶음을 떼어 두고 새로 만든다 */
   async replaceTextBox(docId: number, key: number, objs: number[], spec: TextBoxSpec): Promise<ObjChange & { rect: Rect }> {
     const d = this.D(docId); const pc = this.pageByKey(d, key); this.assertOwned(pc, objs);
     const removed = objs.map(o => ({ h: o, idx: this.objIndex(pc, o) })).sort((a, b) => a.idx - b.idx);
@@ -1623,7 +1623,7 @@ export class PdfEngine {
     this.P.FPDF_MovePages(d.doc, ip, 1, to); this.free(ip);
     d.keys.splice(from, 1); d.keys.splice(to, 0, key);
   }
-  /** 다른 PDF의 쪽을 끼워 넣는다 */
+  /** 다른 PDF의 페이지를 끼워 넣는다 */
   importPdf(docId: number, bytes: Uint8Array, password: string, at: number): { keys?: number[]; error?: string } {
     const d = this.D(docId);
     const buf = this.put(bytes);
@@ -1646,7 +1646,7 @@ export class PdfEngine {
       this.P.FPDFPage_Delete(d.doc, i); d.keys.splice(i, 1);
     }
   }
-  /** 고른 쪽만 새 PDF로 */
+  /** 선택한 페이지만 새 PDF로 */
   extract(docId: number, indices: number[]) {
     const d = this.D(docId);
     for (const pc of d.pages.values()) this.P.FPDFPage_GenerateContent(pc.page);
@@ -1658,8 +1658,8 @@ export class PdfEngine {
     return bytes;
   }
 
-  /* ───────────── 이미지 → 쪽 ───────────── */
-  /** 이미지 한 장을 새 쪽으로. mode 'a4': A4 안에 여백 두고 맞춤 / 'image': 이미지 크기 그대로(150dpi 기준) */
+  /* ───────────── 이미지 → 페이지 ───────────── */
+  /** 이미지 한 장을 새 페이지로. mode 'a4': A4 안에 여백 두고 맞춤 / 'image': 이미지 크기 그대로(150dpi 기준) */
   addImagePage(docId: number, at: number, spec: { bytes: Uint8Array; kind: 'jpg' | 'png'; w: number; h: number }, mode: 'a4' | 'image' = 'a4') {
     const d = this.D(docId);
     let pw: number, ph: number, iw: number, ih: number;

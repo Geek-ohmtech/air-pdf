@@ -1,4 +1,4 @@
-/** 엔진 ↔ 화면이 주고받는 자료. 좌표는 전부 화면 pt(좌상단 원점, 쪽 회전 반영) */
+/** 엔진 ↔ 화면이 주고받는 자료. 좌표는 전부 화면 pt(좌상단 원점, 페이지 회전 반영) */
 export interface Rect { x: number; y: number; w: number; h: number }
 export interface PageSize { key: number; w: number; h: number }
 export interface DocInfo {

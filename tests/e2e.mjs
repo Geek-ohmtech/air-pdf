@@ -144,7 +144,7 @@ console.log('쪽 다루기 / 저장');
 await page.click('.rb-tab[data-t="page"]');
 await page.evaluate(() => window.__app.view.scrollToPage(5));
 await page.waitForTimeout(300);
-await page.click('.rt:has-text("쪽 삭제")');
+await page.click('.rt:has-text("페이지 삭제")');
 await page.waitForTimeout(600);
 await page.click('.rt:has-text("오른쪽 회전")');
 await page.waitForTimeout(600);

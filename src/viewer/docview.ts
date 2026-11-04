@@ -1,6 +1,6 @@
 /**
- * 문서 화면: 보이는 쪽만 DOM으로 만들고(가상 목록), 보이는 쪽부터 렌더링한다.
- * 확대가 크면 쪽 전체는 낮은 해상도로, 화면에 보이는 부분만 높은 해상도로 따로 그린다.
+ * 문서 화면: 보이는 페이지만 DOM으로 만들고(가상 목록), 보이는 페이지부터 렌더링한다.
+ * 확대가 크면 페이지 전체는 낮은 해상도로, 화면에 보이는 부분만 높은 해상도로 따로 그린다.
  */
 import type { EngineClient } from '../engine/client.ts';
 import type { LinkInfo, PageSize, Rect, SearchHit, TextData } from '../engine/types.ts';
@@ -139,7 +139,7 @@ export class DocView {
     this.zoomT = window.setTimeout(() => this.schedule(), 90);
     this.onZoom(z);
   }
-  /** 문서 좌표(스크롤 내부 px) → 쪽과 그 안의 pt 좌표 */
+  /** 문서 좌표(스크롤 내부 px) → 페이지와 그 안의 pt 좌표 */
   pointAt(cx: number, cy: number): { page: number; x: number; y: number } | null {
     if (!this.slots.length) return null;
     let best = 0, bd = Infinity;
@@ -171,7 +171,7 @@ export class DocView {
     if (x < this.el.scrollLeft || x + r.w * this.zoom > this.el.scrollLeft + this.el.clientWidth) this.el.scrollLeft = x - 40;
   }
 
-  /* ───────────── 보이는 쪽 관리와 렌더링 ───────────── */
+  /* ───────────── 보이는 페이지 관리와 렌더링 ───────────── */
   schedule() { if (!this.raf) this.raf = requestAnimationFrame(() => { this.raf = 0; this.update(); }); }
   private update() {
     if (!this.slots.length) return;
@@ -183,7 +183,7 @@ export class DocView {
     }
     for (const [i, pe] of this.live) if (!want.has(i)) { pe.root.remove(); this.live.delete(i); }
     for (const i of want) if (!this.live.has(i)) this.createPage(i);
-    // 현재 쪽 = 화면 중앙을 지나는 쪽
+    // 현재 페이지 = 화면 중앙을 지나는 페이지
     const mid = top + this.el.clientHeight * 0.4;
     let cur = this.current;
     for (const i of want) { const s = this.slots[i]; if (s.top <= mid && s.top + s.h + GAP >= mid) { cur = i; break; } }
@@ -231,7 +231,7 @@ export class DocView {
       const scale = this.baseScale(i);
       const bk = `${pe.key}:${pe.version}:${scale.toFixed(3)}`;
       if (pe.baseKey !== bk) jobs.push({ index: i, key: pe.key, kind: 'base', scale, version: pe.version, tag: bk });
-      // 세밀 타일: 쪽 전체를 충분한 해상도로 못 그릴 때
+      // 세밀 타일: 페이지 전체를 충분한 해상도로 못 그릴 때
       const need = this.zoom * dpr();
       if (visible && need > scale * 1.05) {
         const vx0 = Math.max(0, this.el.scrollLeft - s.left), vy0 = Math.max(0, top - s.top);
@@ -338,7 +338,7 @@ export class DocView {
     const td = this.textNow(i); if (!td) { this.getText(i); return false; }
     return this.charAt(td, x, y, true) >= 0;
   }
-  /** 선택된 범위를 쪽마다 [시작, 끝) 으로 */
+  /** 선택된 범위를 페이지마다 [시작, 끝) 으로 */
   private ranges(): { page: number; s: number; e: number }[] {
     if (!this.sel) return [];
     let { a, b } = this.sel;
@@ -477,7 +477,7 @@ export class DocView {
     if (this.interaction || !this.live.has(pe.index)) return;
     pe.links.innerHTML = '';
     for (const l of links) {
-      const a = h('a', { class: 'pg-link', href: l.uri || '#', title: l.uri || `${(l.page ?? 0) + 1}쪽으로 이동`, style: this.pct(pe.index, l.rect) });
+      const a = h('a', { class: 'pg-link', href: l.uri || '#', title: l.uri || `${(l.page ?? 0) + 1}페이지로 이동`, style: this.pct(pe.index, l.rect) });
       a.addEventListener('click', ev => { ev.preventDefault(); this.onLink(l); });
       pe.links.append(a);
     }
@@ -493,7 +493,7 @@ export class DocView {
     for (const hit of list) for (const r of hit.rects)
       pe.hits.append(h('div', { class: 'hit-r' + (hit === this.curHit ? ' cur' : ''), style: this.pct(pe.index, { x: r.x - 1, y: r.y - 1, w: r.w + 2, h: r.h + 2 }) }));
   }
-  /** 쪽 크기에 대한 백분율 위치 → 확대해도 다시 그릴 필요가 없다 */
+  /** 페이지 크기에 대한 백분율 위치 → 확대해도 다시 그릴 필요가 없다 */
   pct(i: number, r: Rect) {
     const p = this.pages[i];
     return { left: r.x / p.w * 100 + '%', top: r.y / p.h * 100 + '%', width: r.w / p.w * 100 + '%', height: r.h / p.h * 100 + '%' };

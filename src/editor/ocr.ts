@@ -27,7 +27,7 @@ export async function getOcr(onProgress?: (msg: string) => void) {
 
 export interface OcrWord { text: string; x: number; y: number; w: number; h: number; conf: number }
 
-/** 그림(쪽 렌더링) → 낱말 목록(그림 px 좌표) */
+/** 그림(페이지 렌더링) → 낱말 목록(그림 px 좌표) */
 export async function recognize(img: ImageBitmap | HTMLCanvasElement, onProgress?: (m: string) => void, opts: { clean?: boolean | 'gray' | 'bw'; merge?: boolean } = {}): Promise<OcrWord[]> {
   const w = await getOcr(onProgress);
   let src: HTMLCanvasElement;
@@ -81,7 +81,7 @@ export async function recognize(img: ImageBitmap | HTMLCanvasElement, onProgress
 }
 export async function stopOcr() { if (workerP) { const w = await workerP.catch(() => null); workerP = null; await w?.terminate?.(); } }
 
-/** 여러 쪽에 글자층 얹기 (편집기와 "이미지 → PDF"가 함께 쓴다). 돌려주는 값으로 되돌리기를 만든다 */
+/** 여러 페이지에 글자층 얹기 (편집기와 "이미지 → PDF"가 함께 쓴다). 돌려주는 값으로 되돌리기를 만든다 */
 export async function ocrPages(engine: { call: <T = any>(m: string, a?: any[]) => Promise<T> }, docId: number, pages: { index: number; key: number }[],
   o: { skipText?: boolean; progress: (m: string) => void; cancelled?: () => boolean }) {
   const changes: any[] = [];

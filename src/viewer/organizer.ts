@@ -1,6 +1,6 @@
 /**
  * 페이지 구성 보기: 문서의 페이지만 크게 늘어놓고 순서 바꾸기·삭제·삽입·회전·추출을 한다.
- * 고른 페이지는 쪽 목록(sidebar.selected)과 같은 것을 써서, 편집기의 페이지 작업이 그대로 동작한다.
+ * 선택한 페이지는 페이지 목록(sidebar.selected)과 같은 것을 써서, 편집기의 페이지 작업이 그대로 동작한다.
  */
 import type { App } from '../app.ts';
 import { h, icon, menu, toast } from '../ui/dom.ts';

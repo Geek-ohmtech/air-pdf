@@ -25,6 +25,8 @@ export interface Platform {
   /** 기본 PDF 프로그램: 지금 상태(알 수 없으면 null)와 지정하기 */
   defaultApp?: { status(): Promise<boolean | null>; make(): Promise<void> };
   version?(): Promise<string>;
+  /** 설치판: 창 테두리를 앱이 직접 그린다 (최소화·최대화·닫기) */
+  win?: { minimize(): void; toggleMaximize(): void; close(): void; isMaximized(): Promise<boolean>; onResized(cb: () => void): void };
   checkUpdate?(): Promise<UpdateInfo | null>;
   readPath(path: string): Promise<OpenedFile>;
   recent(): string[];

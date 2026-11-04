@@ -16,6 +16,8 @@ function inputPick(multiple: boolean, accept = 'application/pdf,.pdf'): Promise<
 export function createWeb(): Platform {
   return {
     kind: 'web',
+    // 시험용: 설치판 제목 표시줄 모양을 웹에서 보려고 (window.__fakeWin)
+    win: (window as any).__fakeWin ? { minimize() {}, toggleMaximize() {}, close() {}, isMaximized: async () => false, onResized() {} } : undefined,
     async pickPdfs(multiple = false) {
       if (W.showOpenFilePicker) {
         try {

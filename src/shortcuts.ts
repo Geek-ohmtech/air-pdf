@@ -10,7 +10,7 @@ export interface Action {
   when?: () => boolean;        // 이때만 동작 (예: 편집 모드)
   allowTyping?: boolean;       // 입력 칸에 있을 때도 동작
 }
-export const GROUPS = ['파일', '탭', '보기', '이동', '찾기', '편집', '편집 도구', '주석 도구', '쪽'];
+export const GROUPS = ['파일', '탭', '보기', '이동', '찾기', '편집', '편집 도구', '주석 도구', '페이지'];
 
 /** 키 이벤트 → "Ctrl+Shift+S" 같은 이름 */
 export function comboOf(e: KeyboardEvent): string | null {
@@ -84,7 +84,7 @@ export class Shortcuts {
     };
     const search = h('input', { class: 'field keys-search', type: 'search', placeholder: '기능이나 키로 찾기 (예: 회전, Ctrl+S)', 'aria-label': '단축키 찾기' }) as HTMLInputElement;
     search.addEventListener('input', () => { q = search.value; render(); });
-    const head = h('div', { class: 'keys-head' }, search, h('p', { class: 'hint' }, '키를 누른 뒤 새 키를 누르면 바뀝니다. Esc는 취소, Backspace는 키 지우기. 바꾼 뒤 “저장”을 누르세요.'));
+    const head = h('div', { class: 'keys-head' }, search, h('p', { class: 'hint' }, '키를 누른 뒤 새 키를 누르면 바뀝니다. Esc는 취소, Backspace는 키 삭제. 바꾼 뒤 “저장”을 누르세요.'));
     render();
     const onKey = (e: KeyboardEvent) => {
       if (!recording) return;

@@ -73,7 +73,7 @@ export class FormLayer {
     let ctl: HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement;
     if (f.type === 'combo' || f.type === 'list') {
       const s = h('select', { class: 'fld-input', multiple: f.type === 'list' && f.multiSelect ? '' : undefined, 'aria-label': f.name }) as HTMLSelectElement;
-      if (f.type === 'combo' && !f.options.some(o => o.selected)) s.append(h('option', { value: '-1', selected: '' }, '— 고르세요 —'));
+      if (f.type === 'combo' && !f.options.some(o => o.selected)) s.append(h('option', { value: '-1', selected: '' }, '— 선택하세요 —'));
       f.options.forEach((o, i) => s.append(h('option', { value: String(i), selected: o.selected ? '' : undefined }, o.label)));
       ctl = s;
     } else if (f.multiline) {

@@ -81,6 +81,13 @@ export function createDesktop(): Platform {
       make: () => invoke('make_default_app'),
     },
     version: () => getVersion(),
+    win: {
+      minimize: () => { win.minimize(); },
+      toggleMaximize: () => { win.toggleMaximize(); },
+      close: () => { win.close(); },
+      isMaximized: () => win.isMaximized(),
+      onResized: cb => { win.onResized(() => cb()); },
+    },
     async checkUpdate() {
       const { check } = await import('@tauri-apps/plugin-updater');
       const u = await check();

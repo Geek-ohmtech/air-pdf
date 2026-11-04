@@ -551,3 +551,18 @@ body.drop-in-thumbs .dropzone { display: none; }
 .set-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 7px 0; border-bottom: 1px solid var(--line); font-size: 13.5px; }
 .set-row small { display: block; color: var(--muted); font-size: 12px; }
 .set-row .field { max-width: 220px; }
+/* 설치판 제목 표시줄 (운영체제 것 대신) */
+.topbar { display: flex; align-items: stretch; }
+.tb-scroll { flex: 1; min-width: 0; position: relative; }
+.tb-spacer { flex: 1 1 40px; min-width: 24px; align-self: stretch; display: flex; align-items: center; justify-content: center; overflow: hidden; }
+.win-title { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; color: var(--muted); padding: 0 8px; user-select: none; }
+.win-title.dirty::before { content: "●"; color: var(--edit); margin-right: 5px; font-size: 10px; vertical-align: 1px; }
+.titlebar { user-select: none; -webkit-user-select: none; }
+.win-ctl { display: flex; flex: none; margin-left: 4px; border-left: 1px solid var(--line); }
+.wc { width: 46px; height: 100%; display: inline-flex; align-items: center; justify-content: center; border: 0; border-radius: 0; background: none; color: var(--ink); }
+.wc:hover { background: color-mix(in srgb, var(--ink) 9%, transparent); }
+.wc:active { background: color-mix(in srgb, var(--ink) 16%, transparent); }
+.wc.close:hover { background: #c42b1c; color: #fff; }
+.wc.close:active { background: #b22a1b; color: #fff; }
+.wc-ico { display: inline-flex; }
+@media (max-width: 720px) { .win-title { display: none; } }

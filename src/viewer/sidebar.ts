@@ -1,4 +1,4 @@
-/** 왼쪽 패널: 쪽 그림, 목차, 검색 결과, (편집 모드) 주석 목록 */
+/** 왼쪽 패널: 페이지 그림, 목차, 검색 결과, (편집 모드) 주석 목록 */
 import type { OutlineItem, SearchHit } from '../engine/types.ts';
 import type { DocView } from './docview.ts';
 import { h, icon, esc, type IconName } from '../ui/dom.ts';
@@ -14,7 +14,7 @@ export class Sidebar {
   private thumbList: HTMLElement;
   private thumbObs: IntersectionObserver;
   private thumbDone = new Map<number, number>(); // key → version
-  selected = new Set<number>(); // 고른 쪽(키)
+  selected = new Set<number>(); // 선택한 페이지(키)
   editable = true;
   onMovePage: (key: number, to: number) => void = () => {};
   onThumbMenu: (e: MouseEvent, index: number) => void = () => {};
@@ -37,7 +37,7 @@ export class Sidebar {
     this.body = h('div', { class: 'side-body' });
     this.el = h('aside', { class: 'sidebar', 'aria-label': '탐색 패널' }, this.tabs, this.body);
     parent.prepend(this.el);
-    this.thumbList = h('div', { class: 'thumbs', tabindex: '0', 'aria-label': '쪽 목록. 끌어서 순서 바꾸기, Delete로 지우기, 다른 PDF를 끌어 놓아 넣기' });
+    this.thumbList = h('div', { class: 'thumbs', tabindex: '0', 'aria-label': '페이지 목록. 끌어서 순서 바꾸기, Delete로 삭제, 다른 PDF를 끌어 놓아 삽입' });
     // 페이지 목록 위: 1열/2열, 페이지 구성 보기
     try { this.cols = localStorage.getItem('airpdf.thumbCols') === '2' ? 2 : 1; } catch { /* */ }
     const colBtn = (n: 1 | 2, title: string) => h('button', { class: 'th-col', type: 'button', title, 'aria-pressed': String(this.cols === n), dataset: { n: String(n) }, onclick: () => this.setCols(n) }, icon(n === 1 ? 'col1' : 'col2'));
@@ -69,7 +69,7 @@ export class Sidebar {
     this.tabs.querySelectorAll('.side-tab').forEach(b => b.setAttribute('aria-selected', String((b as HTMLElement).dataset.tab === tab)));
   }
 
-  /* ───────────── 쪽 그림 ───────────── */
+  /* ───────────── 페이지 그림 ───────────── */
   private anchor = -1;
   buildThumbs() {
     this.thumbObs.disconnect(); this.thumbList.innerHTML = ''; this.thumbDone.clear();
@@ -77,7 +77,7 @@ export class Sidebar {
     const W = this.cols === 2 ? 80 : 118;
     this.view.pages.forEach((p, i) => {
       const hgt = Math.round(W * p.h / p.w);
-      const item = h('div', { class: 'thumb' + (this.selected.has(p.key) ? ' picked' : ''), dataset: { i: String(i), key: String(p.key) }, title: `${i + 1}쪽` },
+      const item = h('div', { class: 'thumb' + (this.selected.has(p.key) ? ' picked' : ''), dataset: { i: String(i), key: String(p.key) }, title: `${i + 1}페이지` },
         h('div', { class: 'thumb-paper', style: { width: W + 'px', height: Math.min(hgt, 170) + 'px' } }, h('canvas', {})),
         h('span', { class: 'thumb-num' }, String(i + 1)));
       this.thumbList.append(item);
@@ -107,7 +107,7 @@ export class Sidebar {
     if (it) { it.classList.add('current'); if (this.tab === 'thumbs' && !this.el.hidden) it.scrollIntoView({ block: 'nearest' }); }
   }
   /* ───────────── 끌어 놓을 자리 (설치판에서 파일을 끌어 올 때도 씀) ───────────── */
-  /** 화면 좌표가 쪽 목록 위면 넣을 자리(0~쪽 수), 아니면 null */
+  /** 화면 좌표가 페이지 목록 위면 넣을 자리(0~페이지 수), 아니면 null */
   dropIndexAt(x: number, y: number): number | null {
     if (this.el.hidden || this.tab !== 'thumbs' || !this.view.pages.length) return null;
     const lr = this.body.getBoundingClientRect();
@@ -156,7 +156,7 @@ export class Sidebar {
         if (Math.hypot(e.clientX - pd.x, e.clientY - pd.y) < 6) return;
         pd.started = true; pd.el.classList.add('dragging'); document.body.classList.add('thumb-dragging');
         const cv = pd.el.querySelector('canvas') as HTMLCanvasElement | null;
-        pd.ghost = h('div', { class: 'thumb-ghost' }, cv && cv.width ? (() => { const c = h('canvas', {}) as HTMLCanvasElement; c.width = cv.width; c.height = cv.height; c.getContext('2d')!.drawImage(cv, 0, 0); return c; })() : null, h('span', {}, `${+pd.el.dataset.i! + 1}쪽`));
+        pd.ghost = h('div', { class: 'thumb-ghost' }, cv && cv.width ? (() => { const c = h('canvas', {}) as HTMLCanvasElement; c.width = cv.width; c.height = cv.height; c.getContext('2d')!.drawImage(cv, 0, 0); return c; })() : null, h('span', {}, `${+pd.el.dataset.i! + 1}페이지`));
         document.body.append(pd.ghost);
         // 목록 가장자리에 가면 저절로 넘긴다
         const tick = () => {
@@ -249,7 +249,7 @@ export class Sidebar {
     });
   }
   paintPicked() { this.thumbList.querySelectorAll('.thumb').forEach(t => t.classList.toggle('picked', this.selected.has(+(t as HTMLElement).dataset.key!))); }
-  /** 편집 대상 쪽: 고른 쪽이 있으면 그것, 없으면 현재 쪽 */
+  /** 편집 대상 페이지: 선택한 페이지가 있으면 그것, 없으면 현재 페이지 */
   targetPages(): number[] {
     const keys = this.view.pages.map(p => p.key);
     const picked = keys.filter(k => this.selected.has(k));
@@ -284,14 +284,14 @@ export class Sidebar {
   searchAdd(hits: SearchHit[], startIndex: number) {
     if (!hits.length) return;
     const page = hits[0].page;
-    const g = h('div', { class: 'sr-group' }, h('div', { class: 'sr-page' }, `${page + 1}쪽`));
+    const g = h('div', { class: 'sr-group' }, h('div', { class: 'sr-page' }, `${page + 1}페이지`));
     hits.forEach((hit, k) => g.append(h('button', { class: 'sr-item', type: 'button', dataset: { n: String(startIndex + k) }, onclick: () => this.onSearchPick(hit), html: `${esc(hit.before)}<mark>${esc(hit.match)}</mark>${esc(hit.after)}` })));
     this.searchList.append(g);
   }
   searchProgress(q: string, found: number, page: number, total: number, done: boolean) {
     this.searchHead.innerHTML = done
       ? (found ? `“${esc(q)}” <b>${found}</b>건` : `“${esc(q)}”와 맞는 글자가 없습니다. 스캔 문서라면 편집 → 도구 → 글자 인식(OCR)을 먼저 하세요.`)
-      : `<span class="spin sm"></span> ${page + 1}/${total}쪽 · ${found}건`;
+      : `<span class="spin sm"></span> ${page + 1}/${total}페이지 · ${found}건`;
   }
   markHit(n: number) {
     this.searchList.querySelector('.sr-item.cur')?.classList.remove('cur');

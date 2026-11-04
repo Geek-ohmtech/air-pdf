@@ -162,7 +162,7 @@ export function rotate(c: HTMLCanvasElement, deg: number) {
   return r;
 }
 
-/** 종이 바탕의 밝기가 고르지 않은가 (그늘진 사진). 이미 깨끗하게 스캔한 쪽은 false */
+/** 종이 바탕의 밝기가 고르지 않은가 (그늘진 사진). 이미 깨끗하게 스캔한 페이지는 false */
 export function unevenLight(c: HTMLCanvasElement) {
   const k = 160 / Math.max(c.width, c.height), w = Math.max(8, Math.round(c.width * k)), h = Math.max(8, Math.round(c.height * k));
   const s = document.createElement('canvas'); s.width = w; s.height = h;
@@ -187,7 +187,7 @@ export function enhance(c: HTMLCanvasElement, mode: Mode) {
   const sw = Math.ceil(W / f), sh = Math.ceil(H / f);
   const small = new Float32Array(sw * sh);
   for (let y = 0; y < sh; y++) for (let x = 0; x < sw; x++) {
-    // 칸 안에서 가장 밝은 쪽(종이)을 쓴다
+    // 칸 안에서 가장 밝은 페이지(종이)을 쓴다
     let m = 0;
     for (let yy = y * f; yy < Math.min(H, y * f + f); yy += Math.max(1, f >> 1)) for (let xx = x * f; xx < Math.min(W, x * f + f); xx += Math.max(1, f >> 1)) { const j = (yy * W + xx) * 4; const v = d[j] * 0.299 + d[j + 1] * 0.587 + d[j + 2] * 0.114; if (v > m) m = v; }
     small[y * sw + x] = m;
@@ -213,7 +213,7 @@ export function enhance(c: HTMLCanvasElement, mode: Mode) {
       for (let j = 0; j < d.length; j += 4) { d[j] = Math.min(255, d[j] * kr); d[j + 1] = Math.min(255, d[j + 1] * kg); d[j + 2] = Math.min(255, d[j + 2] * kb); }
     }
   }
-  // 대비: 어두운 쪽 1%를 검정으로, 바탕을 흰색으로
+  // 대비: 어두운 페이지 1%를 검정으로, 바탕을 흰색으로
   const hist = new Uint32Array(256); for (const v of out) hist[v | 0]++;
   let lo = 0, acc = 0; while (lo < 200 && (acc += hist[lo]) < n * 0.01) lo++;
   const hi = 236, span = Math.max(30, hi - lo);
