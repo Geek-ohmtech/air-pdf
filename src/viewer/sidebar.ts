@@ -21,6 +21,14 @@ export class Sidebar {
   onSearchPick: (hit: SearchHit) => void = () => {};
   onDeleteKey: () => void = () => {};
   onDropFiles: (files: File[], at: number) => void = () => {};
+  onOrganize: () => void = () => {};
+  cols: 1 | 2 = 1;
+  setCols(n: 1 | 2) {
+    this.cols = n; try { localStorage.setItem('airpdf.thumbCols', String(n)); } catch { /* */ }
+    this.thumbList.classList.toggle('two', n === 2);
+    this.panels.get('thumbs')?.querySelectorAll('.th-col').forEach(b => b.setAttribute('aria-pressed', String((b as HTMLElement).dataset.n === String(n))));
+    this.buildThumbs();
+  }
   private searchList: HTMLElement; private searchHead: HTMLElement;
 
   constructor(parent: HTMLElement, view: DocView) {
@@ -30,7 +38,13 @@ export class Sidebar {
     this.el = h('aside', { class: 'sidebar', 'aria-label': '탐색 패널' }, this.tabs, this.body);
     parent.prepend(this.el);
     this.thumbList = h('div', { class: 'thumbs', tabindex: '0', 'aria-label': '쪽 목록. 끌어서 순서 바꾸기, Delete로 지우기, 다른 PDF를 끌어 놓아 넣기' });
-    this.addPanel('thumbs', '쪽', 'thumbs', this.thumbList);
+    // 페이지 목록 위: 1열/2열, 페이지 구성 보기
+    try { this.cols = localStorage.getItem('airpdf.thumbCols') === '2' ? 2 : 1; } catch { /* */ }
+    const colBtn = (n: 1 | 2, title: string) => h('button', { class: 'th-col', type: 'button', title, 'aria-pressed': String(this.cols === n), dataset: { n: String(n) }, onclick: () => this.setCols(n) }, icon(n === 1 ? 'col1' : 'col2'));
+    const head = h('div', { class: 'thumbs-head' }, colBtn(1, '한 줄로 보기'), colBtn(2, '두 줄로 보기'), h('span', { class: 'grow' }),
+      h('button', { class: 'th-org', type: 'button', title: '페이지 구성 보기 (Ctrl+Shift+G): 페이지만 크게 늘어놓고 순서·삭제·삽입', onclick: () => this.onOrganize() }, icon('grid'), h('span', {}, '페이지 구성')));
+    this.thumbList.classList.toggle('two', this.cols === 2);
+    this.addPanel('thumbs', '페이지', 'thumbs', h('div', { class: 'thumbs-wrap' }, head, this.thumbList));
     this.addPanel('outline', '목차', 'outline', h('div', { class: 'outline' }, h('p', { class: 'empty' }, '목차가 없는 문서입니다.')));
     this.searchHead = h('div', { class: 'search-head' });
     this.searchList = h('div', { class: 'search-list' });
@@ -60,7 +74,7 @@ export class Sidebar {
   buildThumbs() {
     this.thumbObs.disconnect(); this.thumbList.innerHTML = ''; this.thumbDone.clear();
     this.anchor = -1;
-    const W = 118;
+    const W = this.cols === 2 ? 80 : 118;
     this.view.pages.forEach((p, i) => {
       const hgt = Math.round(W * p.h / p.w);
       const item = h('div', { class: 'thumb' + (this.selected.has(p.key) ? ' picked' : ''), dataset: { i: String(i), key: String(p.key) }, title: `${i + 1}쪽` },
@@ -99,6 +113,13 @@ export class Sidebar {
     const lr = this.body.getBoundingClientRect();
     if (x < lr.left || x > lr.right || y < lr.top || y > lr.bottom) return null;
     const items = [...this.thumbList.querySelectorAll('.thumb')] as HTMLElement[];
+    if (this.cols === 2) {
+      let best = -1, bd = Infinity;
+      items.forEach((it, i) => { const r = it.getBoundingClientRect(); const dx = x < r.left ? r.left - x : x > r.right ? x - r.right : 0, dy = y < r.top ? r.top - y : y > r.bottom ? y - r.bottom : 0; const dd = dx * dx + dy * dy * 4; if (dd < bd) { bd = dd; best = i; } });
+      if (best < 0) return this.view.pages.length;
+      const r = items[best].getBoundingClientRect();
+      return best + (x > r.left + r.width / 2 ? 1 : 0);
+    }
     for (const it of items) {
       const r = it.getBoundingClientRect();
       if (y < r.top + r.height / 2) return +it.dataset.i!;

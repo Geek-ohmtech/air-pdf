@@ -181,12 +181,14 @@ export class Editor {
       this.toolBar.append(
         this.actBtn('rotL', '왼쪽 회전 ▾', (e?: any) => this.rotateMenu(e, -1), '왼쪽으로 돌리기: 현재·고른·모든 쪽'), this.actBtn('rotR', '오른쪽 회전 ▾', (e?: any) => this.rotateMenu(e, 1), '오른쪽으로 돌리기: 현재·고른·모든 쪽'), sep(),
         this.actBtn('pageAdd', '빈 쪽', () => this.insertBlank()), this.actBtn('image', '이미지 쪽', () => this.imagePages(), '이미지를 새 쪽으로 넣기'), this.actBtn('merge', 'PDF 합치기', () => this.mergePdf()), this.actBtn('extract', '쪽 뽑아내기', () => this.extract()), sep(),
-        this.actBtn('up', '앞으로', () => this.shiftPages(-1)), this.actBtn('down', '뒤로', () => this.shiftPages(1)), this.actBtn('trash', '쪽 삭제', () => this.deletePages()),
+        this.actBtn('up', '앞으로', () => this.shiftPages(-1)), this.actBtn('down', '뒤로', () => this.shiftPages(1)), this.actBtn('trash', '쪽 삭제', () => this.deletePages()), sep(),
+        this.actBtn('grid', '페이지 구성', () => this.app.organizer.show(), '페이지만 크게 늘어놓고 순서·삭제·삽입 (Ctrl+Shift+G)'),
         h('span', { class: 'rb-note' }, '왼쪽 쪽 목록에서 Ctrl/Shift+클릭으로 여러 쪽을 고르고, 끌어서 순서를 바꿉니다.'));
       this.app.sidebar.show('thumbs');
       this.setTool('select');
     } else {
       this.toolBar.append(
+        this.actBtn('scan', '문서 보정', () => this.correctPages(), '사진·스캔 페이지를 반듯하게 펴고 기울기·그늘·대비를 바로잡습니다 (선택한 페이지 또는 현재 페이지)'),
         this.actBtn('ocr', '글자 인식', () => this.ocrDialog(), '스캔한 쪽의 글자를 인식해 검색·복사되게 합니다 (OCR)'), sep(),
         this.actBtn('lock', '암호 설정', () => this.setPassword()), this.actBtn('lock', '암호 해제', () => this.removePassword()), sep(),
         this.actBtn('info', '문서 속성', () => this.editMeta()), this.actBtn('comments', '작성자 이름', () => this.setAuthor()));
@@ -1217,8 +1219,29 @@ export class Editor {
       { label: `모든 쪽 (${this.V.pages.length}쪽) ${dirName}으로`, icon: dir > 0 ? 'rotR' : 'rotL', hint: dir > 0 ? 'Ctrl+Shift+]' : '', action: () => this.rotate(dir, 'all') },
     ]);
   }
-  async insertBlank() {
-    const id = this.doc.id, at = this.V.current + 1, ref = this.V.pages[this.V.current];
+  /** 여러 쪽을 한 자리(at: 옮기기 전 목록 기준 넣을 자리)로 옮긴다. 되돌리기는 한 번에 */
+  async movePages(keys: number[], at: number) {
+    const id = this.doc.id, order = this.V.pages.map(p => p.key), want = new Set(keys);
+    const sel = order.filter(k => want.has(k));
+    const pos = at - order.slice(0, at).filter(k => want.has(k)).length;
+    // 바라는 최종 순서를 만든 뒤, 앞에서부터 다른 자리만 그 자리로 옮긴다
+    const rest = order.filter(k => !want.has(k));
+    const goal = [...rest.slice(0, pos), ...sel, ...rest.slice(pos)];
+    const cur = [...order], moves: { key: number; from: number; to: number }[] = [];
+    for (let i = 0; i < goal.length; i++) {
+      if (cur[i] === goal[i]) continue;
+      const from = cur.indexOf(goal[i]);
+      moves.push({ key: goal[i], from, to: i }); cur.splice(from, 1); cur.splice(i, 0, goal[i]);
+    }
+    if (!moves.length) return;
+    for (const m of moves) await this.E.call('movePage', [id, m.key, m.to]);
+    this.push({ label: sel.length > 1 ? `${sel.length}쪽 옮기기` : '쪽 옮기기', keys: [], structural: true,
+      undo: async () => { for (const m of [...moves].reverse()) await this.E.call('movePage', [id, m.key, m.from]); },
+      redo: async () => { for (const m of moves) await this.E.call('movePage', [id, m.key, m.to]); } });
+    await this.app.reloadPages(pos);
+  }
+  async insertBlank(atIndex?: number) {
+    const id = this.doc.id, at = atIndex ?? this.V.current + 1, ref = this.V.pages[Math.min(Math.max(0, at - 1), this.V.pages.length - 1)];
     const key = await this.E.call<number>('insertBlank', [id, at, ref.w, ref.h]);
     this.push({ label: '빈 쪽 넣기', keys: [], structural: true, undo: () => this.E.call('removePages', [id, [key]]), redo: () => this.E.call('insertBlank', [id, at, ref.w, ref.h, key]) });
     await this.app.reloadPages(at);
@@ -1321,6 +1344,53 @@ export class Editor {
   }
 
   /* ───────────── 도구 ───────────── */
+  /** 문서 보정: 사진·스캔 페이지를 반듯하게 펴고 그늘·대비를 바로잡는다 (선택한 페이지 또는 현재 페이지) */
+  async correctPages() {
+    await this.commitPending();
+    const id = this.doc.id, keys = this.targets();
+    const idx = keys.map(k => this.V.pages.findIndex(p => p.key === k)).filter(i => i >= 0);
+    if (!idx.length) return;
+    const { scanDialog } = await import('../scan/ui.ts');
+    const { toBlob } = await import('../scan/scan.ts');
+    const b = busy('페이지를 불러오는 중…');
+    const srcs: { name: string; canvas: HTMLCanvasElement }[] = [];
+    try {
+      for (const i of idx) {
+        const r: any = await this.E.call('render', [id, i, 220 / 72, undefined, false, false]);
+        const c = document.createElement('canvas'); c.width = r.width; c.height = r.height;
+        const g = c.getContext('2d')!; if (r.bitmap) { g.drawImage(r.bitmap, 0, 0); r.bitmap.close(); } else g.putImageData(new ImageData(r.data, r.width, r.height), 0, 0);
+        srcs.push({ name: `${i + 1}페이지`, canvas: c });
+      }
+    } finally { b.done(); }
+    const out = await scanDialog(srcs, { title: idx.length > 1 ? `문서 보정 (${idx.length}페이지)` : '문서 보정', ok: '보정 적용' });
+    if (!out) return;
+    const b2 = busy('보정한 페이지를 넣는 중…');
+    const changes: ObjChange[] = [];
+    try {
+      for (const [n, c] of out.entries()) {
+        b2.set(`보정한 페이지를 넣는 중… ${n + 1}/${out.length}`);
+        const bytes = new Uint8Array(await (await toBlob(c, 'color')).arrayBuffer());
+        changes.push(await this.E.call<ObjChange>('replaceWithImage', [id, keys[n], { bytes, kind: 'jpg', iw: c.width, ih: c.height }]));
+      }
+    } catch (e: any) { toast('보정하지 못했습니다: ' + e.message); }
+    finally { b2.done(); }
+    if (!changes.length) return;
+    this.push({ label: '문서 보정', keys: changes.map(c => c.key),
+      undo: async () => { for (const c of changes) { await this.E.call('detach', [id, c.key, c.gen, c.added]); await this.E.call('attach', [id, c.key, c.gen, c.removed]); } },
+      redo: async () => { for (const c of changes) { await this.E.call('detach', [id, c.key, c.gen, c.removed]); await this.E.call('attach', [id, c.key, c.gen, c.added]); } } });
+    for (const c of changes) this.changed(c.key);
+    if (await confirmBox('문서 보정', `${changes.length}페이지를 보정했습니다. 이어서 글자 인식(OCR)을 해서 찾기·복사가 되게 할까요?`, '글자 인식')) {
+      const b3 = busy('글자 인식 엔진을 준비하는 중…');
+      try {
+        const { ocrPages } = await import('./ocr.ts');
+        const r = await ocrPages(this.E, id, changes.map(c => ({ index: this.V.pages.findIndex(p => p.key === c.key), key: c.key })), { progress: m => b3.set(m) });
+        if (r.changes.length) this.push({ label: '글자 인식', keys: r.changes.map(c => c.key), undo: async () => { for (const c of r.changes) await this.E.call('detach', [id, c.key, c.gen, c.added]); }, redo: async () => { for (const c of r.changes) await this.E.call('attach', [id, c.key, c.gen, c.added]); } });
+        for (const c of r.changes) this.changed(c.key);
+        toast(`낱말 ${r.words}개를 인식했습니다. 이제 찾기(Ctrl+F)가 됩니다.`, 4000);
+      } catch (e: any) { toast('글자 인식을 하지 못했습니다: ' + e.message); }
+      finally { b3.done(); }
+    }
+  }
   private async ocrDialog() {
     const sel = h('select', { class: 'field' }, h('option', { value: 'cur' }, `현재 쪽 (${this.V.current + 1}쪽)`), h('option', { value: 'empty' }, '글자가 없는 쪽 모두 (스캔 쪽)'), h('option', { value: 'all' }, '모든 쪽'));
     const r = await dialog({ title: '글자 인식 (OCR)', body: h('div', { class: 'form' }, h('p', {}, '스캔한 쪽의 글자를 한국어·영어로 인식해 보이지 않는 글자층으로 얹습니다. 모양은 그대로이고, 저장하면 다른 프로그램에서도 검색·복사가 됩니다. 인식은 이 컴퓨터 안에서만 합니다.'), h('label', { class: 'lbl' }, '대상'), sel), buttons: [{ label: '취소', value: false }, { label: '인식 시작', value: true, primary: true }], collect: () => sel.value });
@@ -1336,21 +1406,10 @@ export class Editor {
     const changes: ObjChange[] = [];
     let done = 0, words = 0;
     try {
-      const { recognize } = await import('./ocr.ts');
-      for (const i of pages) {
-        if (cancelled) break;
-        if (which === 'empty' && await this.E.call<boolean>('hasText', [id, i])) continue;
-        b.set(`${i + 1}쪽 인식 중… (${done + 1}/${which === 'cur' ? 1 : pages.length})`);
-        const scale = 300 / 72;
-        const res: any = await this.E.call('render', [id, i, scale, undefined, false]);
-        const bmp: ImageBitmap = res.bitmap || await createImageBitmap(new ImageData(res.data, res.width, res.height));
-        const found = await recognize(bmp, m => b.set(`${i + 1}쪽 ${m}`));
-        bmp.close?.();
-        const key = keysAt[i];
-        const ch = await this.E.call<ObjChange>('addOcrLayer', [id, key, found.map(w => ({ text: w.text, x: w.x / scale, y: w.y / scale, w: w.w / scale, h: w.h / scale }))]);
-        if (ch.added.length) { changes.push(ch); this.changed(key); }
-        words += found.length; done++;
-      }
+      const { ocrPages } = await import('./ocr.ts');
+      const r = await ocrPages(this.E, id, pages.map(i => ({ index: i, key: keysAt[i] })), { skipText: which === 'empty', progress: m => b.set(m), cancelled: () => cancelled });
+      changes.push(...r.changes); done = r.done; words = r.words;
+      for (const c of r.changes) this.changed(c.key);
     } catch (e: any) { b.done(); toast('글자 인식을 하지 못했습니다: ' + e.message, 5000); return; }
     b.done();
     if (changes.length) {

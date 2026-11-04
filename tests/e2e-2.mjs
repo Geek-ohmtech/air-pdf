@@ -79,7 +79,9 @@ console.log('이미지 → PDF');
 await page.click('.topbar .tb-group:last-child .tb:last-child');
 const [fc] = await Promise.all([page.waitForEvent('filechooser'), page.click('.menu-item:has-text("이미지로 PDF 만들기")')]);
 await fc.setFiles([FX + 'photo.jpg', FX + 'logo.png']);
-await page.waitForSelector('.modal');
+await page.waitForSelector('.modal .suggest');
+await page.locator('.modal .suggest .chk').nth(0).locator('input').uncheck(); // 보정 없이
+await page.locator('.modal .suggest .chk').nth(1).locator('input').uncheck(); // OCR 없이
 await page.click('.modal .btn.primary');
 await page.waitForFunction(() => window.__app.tabs.length === 4, null, { timeout: 15000 });
 ok(await ev(() => window.__app.doc.info.pageCount) === 2 && await ev(() => window.__app.doc.dirty), '이미지 2장 → 2쪽 새 PDF 탭');

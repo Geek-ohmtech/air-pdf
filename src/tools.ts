@@ -40,41 +40,86 @@ export async function loadImage(file: Blob, name = '이미지'): Promise<ImageSp
   return { bytes: new Uint8Array(await out.arrayBuffer()), kind: jpg ? 'jpg' : 'png', w, h: hgt, name };
 }
 
-async function askPageMode(count: number) {
+type ImgPdfOpts = { mode: 'a4' | 'image'; correct: boolean; ocr: boolean };
+/**
+ * 이미지 → PDF 설정. 사진으로 찍은 문서라면 보정·글자 인식(OCR)을 함께 하자고 제안한다.
+ * "다시 묻지 않기"를 고르면 그 선택을 기억하고, 설정에서 다시 켤 수 있다.
+ */
+async function askImagePdf(app: App, count: number, o: { ocr?: boolean; title?: string; ok?: string } = {}): Promise<ImgPdfOpts | null> {
+  const P = app.prefs, def = P.scanDefault || { correct: true, ocr: true }, ask = P.scanSuggest !== false;
   const sel = h('select', { class: 'field' }, h('option', { value: 'a4' }, 'A4에 맞추기 (가로·세로 자동, 여백 있음)'), h('option', { value: 'image' }, '이미지 크기 그대로'));
-  const r = await dialog({ title: `이미지 ${count}장으로 PDF 만들기`, body: h('div', { class: 'form' }, h('label', { class: 'lbl' }, '쪽 크기'), sel, h('p', { class: 'hint' }, '이미지마다 한 쪽이 됩니다. 사진(JPEG)은 다시 압축하지 않아 화질이 그대로입니다.')), buttons: [{ label: '취소', value: false }, { label: '만들기', value: true, primary: true }], collect: () => sel.value });
-  return r?.value ? (r.data as 'a4' | 'image') : null;
+  const cb = (on: boolean) => h('input', { type: 'checkbox', checked: on ? '' : undefined }) as HTMLInputElement;
+  const corr = cb(def.correct), ocr = cb(o.ocr !== false && def.ocr), never = cb(false);
+  const box = ask ? h('div', { class: 'suggest' },
+    h('div', { class: 'suggest-h' }, '휴대폰으로 찍은 문서인가요?'),
+    h('label', { class: 'chk' }, corr, h('span', {}, '문서 보정', h('small', {}, '종이 모서리에 맞춰 반듯하게 펴고, 기울기·그늘·대비를 바로잡습니다'))),
+    o.ocr !== false ? h('label', { class: 'chk' }, ocr, h('span', {}, '글자 인식 (OCR)', h('small', {}, '찾기·복사·선택이 되도록 보이지 않는 글자를 얹습니다 (이 컴퓨터 안에서 처리)'))) : null,
+    h('label', { class: 'chk never' }, never, h('span', {}, '다시 묻지 않기', h('small', {}, '지금 선택을 기억합니다. 설정에서 다시 켤 수 있습니다'))))
+    : h('p', { class: 'hint' }, `문서 보정 ${def.correct ? '켬' : '끔'}${o.ocr !== false ? ` · 글자 인식 ${def.ocr ? '켬' : '끔'}` : ''} — 메뉴 ⋯ → 설정에서 바꿀 수 있습니다.`);
+  const r = await dialog({ title: o.title || `이미지 ${count}장으로 PDF 만들기`, body: h('div', { class: 'form' }, h('label', { class: 'lbl' }, '페이지 크기'), sel, box, h('p', { class: 'hint' }, '이미지마다 한 페이지가 됩니다. 보정하지 않은 사진(JPEG)은 다시 압축하지 않아 화질이 그대로입니다.')),
+    buttons: [{ label: '취소', value: false }, { label: o.ok || '만들기', value: true, primary: true }],
+    collect: () => ({ mode: sel.value, correct: ask ? corr.checked : def.correct, ocr: o.ocr === false ? false : ask ? ocr.checked : def.ocr }) });
+  if (!r?.value) return null;
+  const v = r.data as ImgPdfOpts;
+  if (ask && never.checked) { P.scanSuggest = false; P.scanDefault = { correct: v.correct, ocr: o.ocr === false ? def.ocr : v.ocr }; app.savePrefs(); }
+  return v;
+}
+/** 보정을 고르면 보정 화면을 거쳐 파일을 바꾼다 (취소하면 null) */
+async function maybeCorrect(files: File[], correct: boolean): Promise<File[] | null> {
+  if (!correct) return files;
+  const { scanDialog, fileToCanvas } = await import('./scan/ui.ts');
+  const b = busy('사진을 불러오는 중…');
+  const srcs: { name: string; canvas: HTMLCanvasElement }[] = [];
+  try { for (const f of files) { try { srcs.push({ name: f.name, canvas: await fileToCanvas(f) }); } catch { toast(`“${f.name}”은 읽을 수 없는 이미지라 건너뜁니다.`); } } }
+  finally { b.done(); }
+  if (!srcs.length) return null;
+  const out = await scanDialog(srcs);
+  if (!out) return null;
+  const { toBlob } = await import('./scan/scan.ts');
+  const b2 = busy('보정한 그림을 저장하는 중…');
+  try {
+    return await Promise.all(out.map(async (c, i) => { const bl = await toBlob(c, 'color'); return new File([bl], srcs[i].name.replace(/\.[^.]+$/, '') + '.jpg', { type: 'image/jpeg' }); }));
+  } finally { b2.done(); }
 }
 
-/** 이미지 여러 장 → 새 PDF(새 탭) */
+/** 이미지 여러 장 → 새 PDF(새 탭). 사진이면 보정·OCR까지 */
 export async function imagesToPdf(app: App, files?: File[]) {
   if (!files) files = await app.platform.pickImages();
   if (!files.length) return;
-  const mode = await askPageMode(files.length); if (!mode) return;
+  const opt = await askImagePdf(app, files.length); if (!opt) return;
+  const fixed = await maybeCorrect(files, opt.correct); if (!fixed) return;
   const b = busy('PDF를 만드는 중…');
   try {
     const docId = await app.engine.call<number>('createDoc');
     let n = 0;
-    for (const f of files) {
-      b.set(`이미지 넣는 중… ${++n}/${files.length}`);
-      try { const s = await loadImage(f, f.name); await app.engine.call('addImagePage', [docId, n - 1, s, mode]); }
+    for (const f of fixed) {
+      b.set(`이미지 넣는 중… ${++n}/${fixed.length}`);
+      try { const s = await loadImage(f, f.name); await app.engine.call('addImagePage', [docId, n - 1, s, opt.mode]); }
       catch { toast(`“${f.name}”은 읽을 수 없는 이미지라 건너뛰었습니다.`); n--; }
     }
+    if (!n) { b.done(); app.engine.call('close', [docId]); return; }
+    let ocrMsg = '';
+    if (opt.ocr) {
+      const { ocrPages } = await import('./editor/ocr.ts');
+      const keys = await app.engine.call<number[]>('keys', [docId]);
+      const r = await ocrPages(app.engine, docId, keys.map((key, index) => ({ index, key })), { progress: m => b.set(m) });
+      ocrMsg = r.words ? ` 글자 ${r.words}낱말을 인식해 찾기(Ctrl+F)가 됩니다.` : ' 인식한 글자가 없습니다.';
+    }
     b.done();
-    if (!n) { app.engine.call('close', [docId]); return; }
     const base = files.length === 1 ? files[0].name.replace(/\.[^.]+$/, '') : `이미지 ${n}장`;
     await app.addTab(docId, base + '.pdf', true);
-    toast(`${n}쪽짜리 PDF를 만들었습니다. Ctrl+S로 저장하세요.`);
+    toast(`${n}페이지 PDF를 만들었습니다.${ocrMsg} Ctrl+S로 저장하세요.`, 5000);
   } catch (e: any) { b.done(); toast('PDF를 만들지 못했습니다: ' + e.message); }
 }
 
-/** 편집 모드: 이미지를 쪽으로 끼워 넣기 (되돌리기 지원은 편집기에서) */
+/** 편집 모드: 이미지를 페이지로 끼워 넣기 (되돌리기 지원은 편집기에서) */
 export async function insertImagePages(app: App, at: number, files: File[]) {
-  const mode = await askPageMode(files.length); if (!mode) return [];
+  const opt = await askImagePdf(app, files.length, { ocr: false, title: `이미지 ${files.length}장을 페이지로 삽입`, ok: '삽입' }); if (!opt) return [];
+  const fixed = await maybeCorrect(files, opt.correct); if (!fixed) return [];
   const keys: number[] = [];
-  const b = busy('쪽을 넣는 중…');
+  const b = busy('페이지를 넣는 중…');
   try {
-    for (const f of files) { const s = await loadImage(f, f.name); keys.push(await app.engine.call<number>('addImagePage', [app.doc!.id, at + keys.length, s, mode])); }
+    for (const f of fixed) { const s = await loadImage(f, f.name); keys.push(await app.engine.call<number>('addImagePage', [app.doc!.id, at + keys.length, s, opt.mode])); }
   } catch (e: any) { toast('이미지를 넣지 못했습니다: ' + e.message); }
   finally { b.done(); }
   return keys;

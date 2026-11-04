@@ -1275,6 +1275,19 @@ export class PdfEngine {
     return { key, gen: this.gen(d, key), removed: [], added: [{ h: o, idx: this.P.FPDFPage_CountObjects(pc.page) - 1 }], substituted: false };
   }
 
+  /** 페이지 내용을 그림 한 장으로 바꾼다 (문서 보정). 원래 객체는 떼어 두어 되돌리기에 쓴다 */
+  replaceWithImage(docId: number, key: number, spec: { bytes: Uint8Array; kind: 'jpg' | 'png'; iw?: number; ih?: number }): ObjChange {
+    const d = this.D(docId); const pc = this.pageByKey(d, key);
+    const n = this.P.FPDFPage_CountObjects(pc.page);
+    const removed: { h: number; idx: number }[] = [];
+    for (let i = 0; i < n; i++) removed.push({ h: this.P.FPDFPage_GetObject(pc.page, i), idx: i });
+    for (const r of [...removed].reverse()) this.P.FPDFPage_RemoveObject(pc.page, r.h);
+    // 그림 비율을 지켜 페이지 안에 가운데로 (남는 곳은 흰 바탕)
+    let x = 0, y = 0, w = pc.w, hh = pc.h;
+    if (spec.iw && spec.ih) { const k = Math.min(pc.w / spec.iw, pc.h / spec.ih); w = spec.iw * k; hh = spec.ih * k; x = (pc.w - w) / 2; y = (pc.h - hh) / 2; }
+    const ch = this.addImage(docId, key, { bytes: spec.bytes, kind: spec.kind, x, y, w, h: hh });
+    return { ...ch, removed };
+  }
   /** 선/사각형 등 도형(벡터 경로). segs: 화면 좌표 점 목록들 */
   private addPath(pc: PageCtx, d: DocCtx, polys: [number, number][][], o: { stroke?: string; width?: number; fill?: string; close?: boolean }) {
     const first = this.toPage(pc, polys[0][0][0], polys[0][0][1]);

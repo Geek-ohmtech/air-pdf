@@ -28,21 +28,77 @@ export async function getOcr(onProgress?: (msg: string) => void) {
 export interface OcrWord { text: string; x: number; y: number; w: number; h: number; conf: number }
 
 /** 그림(쪽 렌더링) → 낱말 목록(그림 px 좌표) */
-export async function recognize(img: ImageBitmap | HTMLCanvasElement, onProgress?: (m: string) => void): Promise<OcrWord[]> {
+export async function recognize(img: ImageBitmap | HTMLCanvasElement, onProgress?: (m: string) => void, opts: { clean?: boolean | 'gray' | 'bw'; merge?: boolean } = {}): Promise<OcrWord[]> {
   const w = await getOcr(onProgress);
   let src: HTMLCanvasElement;
   if (img instanceof HTMLCanvasElement) src = img;
   else { src = document.createElement('canvas'); src.width = img.width; src.height = img.height; src.getContext('2d')!.drawImage(img, 0, 0); }
+  // 사진·스캔은 조명을 고르게 하고 대비를 높여서 넘긴다 (모양·위치는 그대로라 글자층 자리가 맞는다)
+  // 조명이 고르지 않은 사진만 다듬는다 (이미 깨끗한 스캔은 그대로가 더 잘 읽힌다)
+  const sc = await import('../scan/scan.ts');
+  if (opts.clean === 'gray' || opts.clean === 'bw' || (opts.clean === undefined && sc.unevenLight(src))) { onProgress?.('그림 다듬는 중…'); src = sc.enhance(src, opts.clean === 'bw' ? 'bw' : 'gray'); }
   const { data } = await w.recognize(src, {}, { blocks: true, text: false });
   const out: OcrWord[] = [];
+  const hangul = /[\p{Script=Hangul}]/u, junk = /^[|\\/_~=\-–—.,:;'"`^°*•·()[\]{}<>!?]+$/;
   for (const b of data.blocks || []) for (const p of b.paragraphs || []) for (const l of p.lines || []) {
-    for (const wd of l.words || []) {
-      const t = (wd.text || '').trim();
+    const words = (l.words || []).map((wd: any) => ({ text: (wd.text || '').trim(), x0: wd.bbox.x0, y0: wd.bbox.y0, x1: wd.bbox.x1, y1: wd.bbox.y1, conf: wd.confidence }))
+      .filter((wd: any) => wd.text && !(junk.test(wd.text) && wd.conf < 90))
+      .sort((a: any, b: any) => a.x0 - b.x0);
+    if (!words.length) continue;
+    const hs = words.map((wd: any) => wd.y1 - wd.y0).sort((a: number, b: number) => a - b), lh = hs[hs.length >> 1] || 1;
+    // 한글은 음절마다 낱말로 나뉘어 나오는 일이 많아서, 사이가 좁으면 한 낱말로 붙인다 (찾기·복사가 되게).
+    // 자간이 넓은 줄(머리말·꼬리말)도 있어서, 그 줄의 간격 분포에서 "음절 사이"와 "낱말 사이"를 가른다
+    const korGap = (a: any, b: any) => hangul.test(a.text.slice(-1)) || hangul.test(b.text[0]);
+    const gaps = words.slice(1).map((wd: any, i: number) => korGap(words[i], wd) ? wd.x0 - words[i].x1 : -1).filter((g: number) => g >= 0).sort((a: number, b: number) => a - b);
+    let split = lh * 0.42;
+    if (gaps.length >= 3) {
+      let bi = -1, br = 1.7;
+      for (let i = 0; i < gaps.length - 1; i++) { const r = gaps[i + 1] / Math.max(gaps[i], lh * 0.05); if (r > br && gaps[i] < lh * 0.9) { br = r; bi = i; } }
+      if (bi >= 0) split = Math.min(lh * 0.9, (gaps[bi] + gaps[bi + 1]) / 2);
+    }
+    const single = (t: string) => t.length === 1 && hangul.test(t);
+    const merged: typeof words = [];
+    for (const wd of words) {
+      const last = merged[merged.length - 1];
+      const gap = last ? wd.x0 - last.x1 : Infinity;
+      const kor = last && korGap(last, wd);
+      if (last && wd.x0 < last.x1 - (wd.x1 - wd.x0) * 0.5 && last.text.endsWith(wd.text)) continue; // 겹쳐서 두 번 읽은 낱말
+      const lim = !kor ? lh * 0.12 : single(wd.text) && single(last.text.slice(-1)) && last.text.length === 1 ? Math.max(split, lh * 0.55) : split;
+      if (last && opts.merge !== false && gap < lim) {
+        last.text += wd.text; last.x1 = Math.max(last.x1, wd.x1); last.y0 = Math.min(last.y0, wd.y0); last.y1 = Math.max(last.y1, wd.y1);
+        last.conf = Math.min(last.conf, wd.conf) * 0.3 + (last.conf + wd.conf) / 2 * 0.7;
+      } else merged.push({ ...wd });
+    }
+    for (const wd of merged) {
+      // 같은 자리에 같은 글자를 두 번 읽은 것은 하나만 (겹친 줄)
+      if (out.some(q => q.text === wd.text && Math.min(q.x + q.w, wd.x1) - Math.max(q.x, wd.x0) > (wd.x1 - wd.x0) * 0.6 && Math.min(q.y + q.h, wd.y1) - Math.max(q.y, wd.y0) > (wd.y1 - wd.y0) * 0.5)) continue;
       // 낮은 신뢰도, 또는 한 글자짜리 라틴 잡음(o, O, | 등)은 버린다
-      if (!t || wd.confidence < 45 || (t.length === 1 && !/[\p{Script=Hangul}\p{N}]/u.test(t) && wd.confidence < 80)) continue;
-      out.push({ text: t, x: wd.bbox.x0, y: wd.bbox.y0, w: wd.bbox.x1 - wd.bbox.x0, h: wd.bbox.y1 - wd.bbox.y0, conf: wd.confidence });
+      if (wd.conf < 50 || (wd.text.length === 1 && !/[\p{Script=Hangul}\p{N}]/u.test(wd.text) && wd.conf < 85)) continue;
+      out.push({ text: wd.text, x: wd.x0, y: wd.y0, w: wd.x1 - wd.x0, h: wd.y1 - wd.y0, conf: wd.conf });
     }
   }
   return out;
 }
 export async function stopOcr() { if (workerP) { const w = await workerP.catch(() => null); workerP = null; await w?.terminate?.(); } }
+
+/** 여러 쪽에 글자층 얹기 (편집기와 "이미지 → PDF"가 함께 쓴다). 돌려주는 값으로 되돌리기를 만든다 */
+export async function ocrPages(engine: { call: <T = any>(m: string, a?: any[]) => Promise<T> }, docId: number, pages: { index: number; key: number }[],
+  o: { skipText?: boolean; progress: (m: string) => void; cancelled?: () => boolean }) {
+  const changes: any[] = [];
+  let done = 0, words = 0;
+  for (const [n, p] of pages.entries()) {
+    if (o.cancelled?.()) break;
+    if (o.skipText && await engine.call<boolean>('hasText', [docId, p.index])) continue;
+    const label = pages.length > 1 ? `${p.index + 1}페이지 (${n + 1}/${pages.length})` : `${p.index + 1}페이지`;
+    o.progress(`${label} 글자 인식 중…`);
+    const scale = 300 / 72;
+    const res: any = await engine.call('render', [docId, p.index, scale, undefined, false]);
+    const bmp: ImageBitmap = res.bitmap || await createImageBitmap(new ImageData(res.data, res.width, res.height));
+    const found = await recognize(bmp, m => o.progress(`${label} ${m}`));
+    bmp.close?.();
+    const ch = await engine.call<any>('addOcrLayer', [docId, p.key, found.map(w => ({ text: w.text, x: w.x / scale, y: w.y / scale, w: w.w / scale, h: w.h / scale }))]);
+    if (ch.added.length) changes.push(ch);
+    words += found.length; done++;
+  }
+  return { changes, done, words };
+}

@@ -1,0 +1,115 @@
+// 브라우저 시험 5: 표 칸·안 보이는 상자 고르기, 겹친 순서, 쪽 목록 2줄·페이지 구성, 이미지→PDF 보정·OCR 제안, 설정
+import { createRequire } from 'node:module';
+const { chromium } = createRequire(import.meta.url)('playwright');
+const SHOT = process.env.SHOT || '/tmp';
+const base = 'http://localhost:4173/';
+const b = await chromium.launch();
+const page = await b.newPage({ viewport: { width: 1360, height: 900 } });
+const errs = [];
+page.on('pageerror', e => errs.push('pageerror ' + e.message));
+page.on('console', m => { if (m.type() === 'error') errs.push(m.text()); });
+let fails = 0;
+const ok = (c, m) => { console.log((c ? '  ✓ ' : '  ✗ ') + m); if (!c) fails++; };
+const ev = (fn, arg) => page.evaluate(fn, arg);
+await page.addInitScript(() => { delete window.showSaveFilePicker; delete window.showOpenFilePicker; });
+
+console.log('급여명세서: 고르기');
+await page.goto(base + '?file=fixtures/payslip.pdf');
+await page.waitForFunction(() => window.__app?.doc && document.querySelector('.page canvas.pg-base')?.width > 10, null, { timeout: 20000 });
+await page.click('.mode-b[data-m="edit"]'); await page.waitForSelector('.ribbon .rt');
+await ev(() => { window.__app.setFit('page'); window.__app.view.scrollToPage(0); }); await page.waitForTimeout(600);
+const pg = await page.locator('.page').first().boundingBox(); const z = await ev(() => window.__app.view.zoom);
+const at = (x, y) => [pg.x + x * z, pg.y + y * z];
+const runs = await ev(async () => window.__app.engine.call('textRuns', [window.__app.doc.id, window.__app.view.pages[0].key]));
+const rNum = runs.find(r => r.text === '196,520');
+await page.mouse.click(...at(rNum.rect.x + rNum.rect.w / 2, rNum.rect.y + rNum.rect.h / 2)); await page.waitForTimeout(300);
+ok(await ev(() => window.__app.editor.sel?.run?.text) === '196,520', '표의 한 칸만 골라짐 (옆 칸 “국민연금”은 따로)');
+await page.mouse.click(...at(200, 55)); await page.waitForTimeout(300); // 흰색으로만 칠한 상자 자리
+ok(!(await ev(() => window.__app.editor.sel)), '보이지 않는 흰 상자는 눌러도 안 잡힘');
+await page.mouse.click(...at(250, 190)); await page.waitForTimeout(300); // 표 칸 안 빈 곳
+ok(!(await ev(() => window.__app.editor.sel)), '표 칸 안 빈 곳을 눌러도 표 선이 안 잡힘');
+const r1 = runs.find(r => r.text.startsWith('출근율'));
+await page.mouse.dblclick(...at(r1.rect.x + 10, r1.rect.y + r1.rect.h / 2)); await page.waitForSelector('textarea.ed-text');
+ok((await page.inputValue('textarea.ed-text')) === '출근율 2단계 산정 후', '글자마다 나뉜 줄도 한 번에 고치기: ' + await page.inputValue('textarea.ed-text'));
+await page.keyboard.press('Escape');
+
+console.log('겹친 순서');
+await page.click('.rt[data-tool="rect"]');
+await page.mouse.move(...at(380, 520)); await page.mouse.down(); await page.mouse.move(...at(480, 600), { steps: 4 }); await page.mouse.up(); await page.waitForTimeout(600);
+await page.click('.rt[data-tool="ellipse"]');
+await page.mouse.move(...at(420, 560)); await page.mouse.down(); await page.mouse.move(...at(520, 640), { steps: 4 }); await page.mouse.up(); await page.waitForTimeout(600);
+const order = () => ev(async () => (await window.__app.engine.call('pageObjects', [window.__app.doc.id, window.__app.view.pages[0].key])).filter(o => o.type === 'shape').map(o => o.meta.kind).join());
+ok(await order() === 'rect,ellipse', '처음 순서 ' + await order());
+await page.click('.rb-props .btn:has-text("순서")'); await page.click('.menu-item:has-text("맨 뒤로 보내기")'); await page.waitForTimeout(600);
+ok(await order() === 'ellipse,rect', '원을 맨 뒤로 → ' + await order());
+await page.keyboard.press('Control+z'); await page.waitForTimeout(600);
+ok(await order() === 'rect,ellipse', '되돌리기 → ' + await order());
+
+console.log('쪽 목록 2줄 / 페이지 구성');
+await page.goto(base + '?file=fixtures/sample.pdf');
+await page.waitForFunction(() => window.__app?.doc && document.querySelector('.page canvas.pg-base')?.width > 10, null, { timeout: 20000 });
+await page.click('.th-col[data-n="2"]'); await page.waitForTimeout(400);
+const tb = await page.locator('.thumb').nth(0).boundingBox(), tb2 = await page.locator('.thumb').nth(1).boundingBox();
+ok(Math.abs(tb.y - tb2.y) < 4 && tb2.x > tb.x, '두 줄로 보기');
+await page.click('.th-col[data-n="1"]');
+await page.keyboard.press('Control+Shift+g');
+await page.waitForSelector('.organizer:not([hidden]) .org-card');
+ok(await page.locator('.org-card').count() === 12, '페이지 구성 보기: 12페이지');
+await page.locator('.org-card').nth(1).click(); await page.locator('.org-card').nth(3).click({ modifiers: ['Shift'] });
+ok(await page.locator('.org-card.picked').count() === 3, 'Shift+클릭으로 3페이지 선택');
+const k0 = await ev(() => window.__app.view.pages.map(p => p.key));
+await page.locator('.org-card').nth(2).dragTo(page.locator('.org-card').nth(8), { targetPosition: { x: 150, y: 80 } });
+await page.waitForTimeout(1200);
+const k1 = await ev(() => window.__app.view.pages.map(p => p.key));
+ok(k1.slice(6, 9).join() === k0.slice(1, 4).join() && k1[1] === k0[4], '고른 3페이지를 한 번에 옮김: ' + k1.join(','));
+await page.keyboard.press('Control+z'); await page.waitForTimeout(1000);
+ok((await ev(() => window.__app.view.pages.map(p => p.key))).join() === k0.join(), '한 번에 되돌림');
+await page.locator('.org-card').nth(11).click(); await page.waitForTimeout(200);
+await page.keyboard.press('Delete'); await page.waitForTimeout(1200);
+ok(await page.locator('.org-card').count() === 11, 'Delete로 삭제 → 11페이지');
+await page.screenshot({ path: SHOT + '/i1-organizer.png' });
+await page.click('.organizer .btn.primary:has-text("문서 보기로")');
+ok(await page.locator('.organizer').isHidden(), '문서 보기로 돌아감');
+
+console.log('이미지 → PDF: 보정·OCR 제안');
+// 가짜 휴대폰 사진: 1페이지를 기울여 어두운 책상 위에
+await ev(async () => {
+  const app = window.__app;
+  const r = await app.engine.call('render', [app.doc.id, 0, 1.6, undefined, false, false]);
+  const pgc = document.createElement('canvas'); pgc.width = r.width; pgc.height = r.height; pgc.getContext('2d').drawImage(r.bitmap, 0, 0);
+  const c = document.createElement('canvas'); c.width = 1400; c.height = 1800;
+  const g = c.getContext('2d'); g.fillStyle = '#3b3027'; g.fillRect(0, 0, c.width, c.height);
+  g.translate(700, 900); g.rotate(-0.06); g.drawImage(pgc, -pgc.width / 2, -pgc.height / 2);
+  const blob = await new Promise(res => c.toBlob(res, 'image/jpeg', 0.9));
+  window.__photo = new File([blob], '사진.jpg', { type: 'image/jpeg' });
+});
+await ev(() => { window.__app.prefs.scanSuggest = undefined; window.__app.savePrefs(); });
+const tabs0 = await ev(() => window.__app.tabs.length);
+ev(async () => { const t = await window.__mods.tools(); t.imagesToPdf(window.__app, [window.__photo]); });
+await page.waitForSelector('.modal .suggest');
+ok(await page.locator('.modal .suggest input[type=checkbox]').count() === 3, '보정·글자 인식·다시 묻지 않기 선택 칸');
+await page.check('.modal .suggest .never input');
+await page.click('.modal .btn.primary');
+await page.waitForSelector('.modal.scan .scan-quad', { timeout: 20000 });
+const quadOk = await ev(() => { const p = document.querySelector('.scan-quad polygon').getAttribute('points').split(' ').map(s => s.split(',').map(Number)); return p.length === 4; });
+ok(quadOk, '문서 보정 화면: 모서리 4개를 찾음');
+await page.screenshot({ path: SHOT + '/i2-scan.png' });
+await page.click('.modal.scan .btn.primary');
+await page.waitForFunction(n => window.__app.tabs.length === n + 1 && !document.querySelector('.busy'), tabs0, { timeout: 240000, polling: 500 });
+const t = await ev(async () => (await window.__app.engine.call('textData', [window.__app.doc.id, 0])).text.replace(/\s+/g, ''));
+ok(t.includes('계약') && t.length > 40, `보정 + 글자 인식된 새 PDF (${t.length}자)`);
+ok(await ev(() => JSON.parse(localStorage.getItem('airpdf.prefs')).scanSuggest === false), '다시 묻지 않기 → 기억함');
+ev(async () => { const t = await window.__mods.tools(); t.imagesToPdf(window.__app, [window.__photo]); });
+await page.waitForSelector('.modal');
+ok(await page.locator('.modal .suggest').count() === 0, '다음부터는 제안을 묻지 않음');
+await page.click('.modal .btn:has-text("취소")');
+await page.click('.more-btn'); await page.click('.menu-item:has-text("설정")');
+await page.waitForSelector('.modal .settings');
+await page.locator('.modal .set-row').filter({ hasText: '제안 보기' }).locator('input').check();
+await page.click('.modal .btn.primary');
+ok(await ev(() => JSON.parse(localStorage.getItem('airpdf.prefs')).scanSuggest === true), '설정에서 제안을 다시 켬');
+
+ok(!errs.length, '콘솔 오류 없음' + (errs.length ? ': ' + errs.join(' | ') : ''));
+await b.close();
+console.log(fails ? `\n실패 ${fails}건` : '\n모두 통과');
+process.exit(fails ? 1 : 0);

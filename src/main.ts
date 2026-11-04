@@ -12,6 +12,8 @@ const engine = new EngineClient();
 const platform = await loadPlatform();
 const app = new App(engine, platform);
 (window as any).__app = app;
+// 시험용: 늦게 불러오는 모듈에 닿는 길
+(window as any).__mods = { ocr: () => import('./editor/ocr.ts'), scan: () => import('./scan/scan.ts'), tools: () => import('./tools.ts') };
 const batchP = platform.initialFiles().catch(() => ({ mode: null, files: [] }));
 await engine.ready;
 (window as any).__bootMs = performance.now() - t0;

@@ -6,6 +6,7 @@ import type { Batch, BatchMode, OpenedFile, Platform, SavedTarget, UpdateInfo } 
 import { baseName } from './platform/types.ts';
 import { DocView } from './viewer/docview.ts';
 import { Sidebar } from './viewer/sidebar.ts';
+import { Organizer } from './viewer/organizer.ts';
 import { $, busy, confirmBox, dialog, esc, h, hscroll, icon, menu, promptBox, toast } from './ui/dom.ts';
 import type { Editor } from './editor/editor.ts';
 import THEMES from './theme-list.json';
@@ -25,6 +26,7 @@ export class App {
   doc: DocState | null = null;
   tabs: DocState[] = [];
   forms!: FormLayer;
+  organizer!: Organizer;
   shortcuts: Shortcuts;
   private tabbar!: HTMLElement; private tabbarWrap!: HTMLElement; ribbonWrap!: HTMLElement;
   mode: Mode = 'view';
@@ -34,7 +36,7 @@ export class App {
   private searchInput!: HTMLInputElement; private saveBtn!: HTMLButtonElement; private modeBtns!: HTMLElement;
   private hits: SearchHit[] = []; private hitByPage = new Map<number, SearchHit[]>(); private hitIdx = -1; private lastQuery = '';
   private searchOpts = { matchCase: false, wholeWord: false };
-  prefs: { theme: string; spread: boolean; night: boolean; sidebar: boolean; author: string; shortcuts?: Record<string, string[]>; autoUpdate?: boolean; accent?: string } = { theme: 'system', spread: false, night: false, sidebar: true, author: '' };
+  prefs: { theme: string; spread: boolean; night: boolean; sidebar: boolean; author: string; shortcuts?: Record<string, string[]>; autoUpdate?: boolean; accent?: string; scanSuggest?: boolean; scanDefault?: { correct: boolean; ocr: boolean } } = { theme: 'system', spread: false, night: false, sidebar: true, author: '' };
 
   constructor(engine: EngineClient, platform: Platform) {
     this.engine = engine; this.platform = platform;
@@ -56,6 +58,8 @@ export class App {
     document.body.append(this.root);
     this.view = new DocView(this.stage, engine);
     this.sidebar = new Sidebar(main, this.view);
+    this.organizer = new Organizer(this, main);
+    this.sidebar.onOrganize = () => this.organizer.toggle();
     this.sidebar.el.hidden = !this.prefs.sidebar || innerWidth < 860;
     this.start = this.buildStart();
     this.stage.append(this.start);
@@ -178,6 +182,35 @@ export class App {
     draw();
     const r = await dialog({ title: '테마', body, wide: true, buttons: [{ label: '취소', value: false }, { label: '적용', value: true, primary: true }] });
     if (r?.value) this.savePrefs(); else { this.prefs.theme = before.theme; this.prefs.accent = before.accent; this.applyTheme(); }
+  }
+  /** 설정: 자주 바꾸는 것들을 한곳에 */
+  async settings() {
+    const P = this.prefs;
+    const cb = (on: boolean) => h('input', { type: 'checkbox', checked: on ? '' : undefined }) as HTMLInputElement;
+    const sug = cb(P.scanSuggest !== false), defC = cb(P.scanDefault?.correct ?? true), defO = cb(P.scanDefault?.ocr ?? true);
+    const upd = cb(P.autoUpdate !== false);
+    const author = h('input', { class: 'field', value: P.author || '', placeholder: '사용자', 'aria-label': '주석 작성자 이름' }) as HTMLInputElement;
+    const row = (label: string, sub: string, ctl: Node) => h('label', { class: 'set-row' }, h('span', {}, label, sub ? h('small', {}, sub) : null), ctl);
+    const btnRow = (label: string, sub: string, text: string, fn: () => void) => h('div', { class: 'set-row' }, h('span', {}, label, sub ? h('small', {}, sub) : null), h('button', { class: 'btn sm', type: 'button', onclick: fn }, text));
+    const body = h('div', { class: 'settings' },
+      h('section', { class: 'set-sec' }, h('h3', {}, '화면'),
+        btnRow('테마', '밝기와 강조색', '테마 바꾸기…', () => this.themeDialog()),
+        btnRow('단축키', '보기·바꾸기 (F1)', '단축키…', () => this.showShortcuts())),
+      h('section', { class: 'set-sec' }, h('h3', {}, '이미지 → PDF'),
+        row('만들 때 문서 보정·글자 인식 제안 보기', '“다시 묻지 않기”로 숨긴 제안을 다시 켭니다', sug),
+        row('문서 보정 (제안을 숨겼을 때 기본값)', '반듯하게 펴기, 기울기·그늘·대비 바로잡기', defC),
+        row('글자 인식 OCR (제안을 숨겼을 때 기본값)', '찾기·복사가 되도록 글자층을 얹기', defO)),
+      h('section', { class: 'set-sec' }, h('h3', {}, '편집'),
+        row('주석 작성자 이름', '메모·형광펜 등에 적힙니다', author)),
+      this.platform.checkUpdate || this.platform.defaultApp ? h('section', { class: 'set-sec' }, h('h3', {}, '프로그램'),
+        this.platform.checkUpdate ? row('자동으로 업데이트 확인', '켤 때 새 버전이 있는지 확인합니다', upd) : null,
+        this.platform.defaultApp ? btnRow('기본 PDF 프로그램', 'PDF 파일을 Air PDF로 열기', '지정하기…', () => this.makeDefault()) : null) : null);
+    const r = await dialog({ title: '설정', body, wide: true, buttons: [{ label: '취소', value: false }, { label: '저장', value: true, primary: true }] });
+    if (!r?.value) return;
+    P.scanSuggest = sug.checked; P.scanDefault = { correct: defC.checked, ocr: defO.checked };
+    P.autoUpdate = upd.checked; P.author = author.value.trim();
+    this.engine.call('setAuthor', [P.author || '사용자']).catch(() => {});
+    this.savePrefs(); toast('설정을 저장했습니다.');
   }
   /** Air PDF 정보: 버전, 업데이트 확인 */
   async about() {
@@ -332,6 +365,7 @@ export class App {
     }
     this.sidebar.selected.clear();
     this.sidebar.buildThumbs();
+    this.organizer.refresh();
     this.sidebar.setOutline(tab.outline || []);
     if (!tab.outline) this.engine.call<OutlineItem[]>('outline', [tab.id]).then(o => { tab.outline = o; if (this.doc === tab) this.sidebar.setOutline(o); }).catch(() => {});
     this.clearSearch();
@@ -361,7 +395,7 @@ export class App {
         this.forms.reset();
         this.view.setDoc(0, []);
         this.sidebar.buildThumbs(); this.sidebar.setOutline([]);
-        this.root.classList.add('no-doc'); this.start.hidden = false;
+        this.root.classList.add('no-doc'); this.start.hidden = false; this.organizer.hide();
         this.editor?.loadState(undefined);
         this.updateTitle(); this.updateStatus();
       }
@@ -430,6 +464,7 @@ export class App {
     this.view.setPages(info.pages);
     this.sidebar.selected.forEach(k => { if (!info.pages.some(p => p.key === k)) this.sidebar.selected.delete(k); });
     this.sidebar.buildThumbs();
+    this.organizer.refresh();
     this.view.scrollToPage(Math.min(cur, info.pages.length - 1));
     this.clearSearch();
     this.updateStatus();
@@ -585,11 +620,11 @@ export class App {
       { label: '전체 화면', icon: 'full', hint: 'F11', action: () => this.platform.toggleFullscreen() },
       { label: '테마…', icon: 'theme', hint: ({ system: '시스템', light: '밝게', dark: '어둡게' } as any)[this.prefs.theme], action: () => this.themeDialog() }, '-',
       { label: '문서 정보', icon: 'info', action: () => this.docInfo(), disabled: !this.doc },
+      { label: '설정…', icon: 'settings', hint: this.shortcuts.label('settings'), action: () => this.settings() },
       { label: '단축키', icon: 'keyboard', hint: 'F1', action: () => this.showShortcuts() },
       { label: 'Air PDF 정보', icon: 'info', action: () => this.about() },
       ...(this.platform.defaultApp ? ['-' as const, { label: '기본 PDF 프로그램으로 지정…', icon: 'pin' as const, action: () => this.makeDefault() }] : []),
-      ...(this.platform.checkUpdate ? [{ label: '업데이트 확인', icon: 'update' as const, action: () => this.checkUpdate(true) },
-        { label: '자동으로 업데이트 확인', icon: 'update' as const, checked: this.prefs.autoUpdate !== false, action: () => { this.prefs.autoUpdate = this.prefs.autoUpdate === false; this.savePrefs(); } }] : []),
+      ...(this.platform.checkUpdate ? [{ label: '업데이트 확인', icon: 'update' as const, action: () => this.checkUpdate(true) },] : []),
     ]);
   }
   updateStatus() {
@@ -685,6 +720,8 @@ export class App {
       { id: 'prevTab', group: '탭', label: '이전 탭', keys: ['Ctrl+Shift+Tab', 'Ctrl+PageUp'], run: () => this.cycleTab(-1), allowTyping: true },
       ...[1, 2, 3, 4, 5, 6, 7, 8, 9].map(n => ({ id: 'tab' + n, group: '탭', label: n === 9 ? '마지막 탭' : `${n}번째 탭`, keys: ['Alt+' + n], run: () => { const t = n === 9 ? this.tabs[this.tabs.length - 1] : this.tabs[n - 1]; if (t) this.activate(t); } })),
       { id: 'mode', group: '보기', label: '보기 ↔ 편집 모드', keys: ['Ctrl+E'], run: () => this.setMode(this.mode === 'edit' ? 'view' : 'edit'), allowTyping: true },
+      { id: 'settings', group: '보기', label: '설정', keys: ['Ctrl+,'], run: () => this.settings() },
+      { id: 'organizer', group: '보기', label: '페이지 구성 보기', keys: ['Ctrl+Shift+G'], run: () => this.organizer.toggle(), when: doc, allowTyping: true },
       { id: 'sidebar', group: '보기', label: '탐색 패널 보이기/숨기기', keys: ['F12', 'Ctrl+Shift+B'], run: () => this.toggleSidebar(), allowTyping: true },
       { id: 'fullscreen', group: '보기', label: '전체 화면', keys: ['F11'], run: () => this.platform.toggleFullscreen(), allowTyping: true },
       { id: 'zoomIn', group: '보기', label: '확대', keys: ['Ctrl+=', 'Ctrl+Shift+='], run: () => this.zoomStep(1), when: doc },
@@ -759,14 +796,14 @@ export class App {
     this.platform.onFileDrag?.(async ev => {
       const canInsert = !!this.doc && this.doc.formType < 2;
       if (ev.type === 'over') {
-        const at = canInsert ? this.sidebar.markDropAt(ev.x, ev.y) : null;
+        const at = canInsert ? (this.organizer.isOpen ? this.organizer.markDropAt(ev.x, ev.y) : this.sidebar.markDropAt(ev.x, ev.y)) : null;
         zone.hidden = at !== null; document.body.classList.toggle('drop-in-thumbs', at !== null);
         return;
       }
-      zone.hidden = true; document.body.classList.remove('drop-in-thumbs'); this.sidebar.clearDropMarks();
+      zone.hidden = true; document.body.classList.remove('drop-in-thumbs'); this.sidebar.clearDropMarks(); this.organizer.clearMarks();
       if (ev.type !== 'drop' || !ev.paths.length) return;
       const isPdf = (p: string) => /\.pdf$/i.test(p), isImg = (p: string) => /\.(png|jpe?g|webp|gif|bmp)$/i.test(p);
-      const at = canInsert ? this.sidebar.dropIndexAt(ev.x, ev.y) : null;
+      const at = canInsert ? (this.organizer.isOpen ? (this.organizer.dropIndexAt(ev.x, ev.y) ?? this.view.pages.length) : this.sidebar.dropIndexAt(ev.x, ev.y)) : null;
       const read = async (ps: string[]) => (await Promise.all(ps.map(p => this.platform.readPath(p).catch(() => null)))).filter(Boolean) as OpenedFile[];
       const asFile = (f: OpenedFile) => new File([f.bytes as BlobPart], f.name, { type: isPdf(f.name) ? 'application/pdf' : 'image/' + (f.name.split('.').pop()!.toLowerCase().replace('jpg', 'jpeg')) });
       const pdfs = ev.paths.filter(isPdf), imgs = ev.paths.filter(isImg);
