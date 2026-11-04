@@ -183,7 +183,7 @@ export class Editor {
         this.actBtn('pageAdd', '빈 페이지', () => this.insertBlank()), this.actBtn('image', '이미지 페이지', () => this.imagePages(), '이미지를 새 페이지로 삽입'), this.actBtn('merge', 'PDF 합치기', () => this.mergePdf()), this.actBtn('extract', '페이지 추출', () => this.extract()), sep(),
         this.actBtn('up', '앞으로', () => this.shiftPages(-1)), this.actBtn('down', '뒤로', () => this.shiftPages(1)), this.actBtn('trash', '페이지 삭제', () => this.deletePages()), sep(),
         this.actBtn('grid', '페이지 구성', () => this.app.organizer.show(), '페이지만 크게 늘어놓고 순서·삭제·삽입 (Ctrl+Shift+G)'),
-        h('span', { class: 'rb-note' }, '왼쪽 페이지 목록에서 Ctrl/Shift+클릭으로 여러 페이지를 선택하고, 끌어서 순서를 바꿉니다.'));
+        h('span', { class: 'rb-note' }, 'Ctrl·Shift+클릭으로 여러 페이지 선택 · 끌어서 순서 변경'));
       this.app.sidebar.show('thumbs');
       this.setTool('select');
     } else {

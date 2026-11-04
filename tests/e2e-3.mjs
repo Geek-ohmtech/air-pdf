@@ -179,7 +179,7 @@ await page.screenshot({ path: SHOT + '/g3-objects.png' });
 
 console.log('영역 삭제: 글자만');
 await page.click('.rt[data-tool="redact"]');
-await page.selectOption('.rb-props select[aria-label="지울 대상"]', 'text');
+await page.selectOption('.rb-props select[aria-label="삭제할 대상"]', 'text');
 const before = await objs();
 const shapes0 = before.filter(o => o.type !== 'image').length;
 sh = before.find(o => o.type === 'shape');
