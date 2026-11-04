@@ -1,0 +1,15 @@
+{
+  "version": "0.4.0",
+  "notes": "넣은 뒤 글자 꾸미기, 글꼴 고르기, 글상자, 자유선, 도형 다시 고치기, PDF 나누기·합치기, 탐색기 메뉴, 기본 PDF 프로그램, 자동 업데이트",
+  "pub_date": "2026-11-04T06:53:20Z",
+  "platforms": {
+    "windows-x86_64": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSZ1IvQktHdktZWmJiWXJIZXBXVGRFK3c3UFBjYk15ZEQzSGdXWVVZVGdZUHVIK1d6OUFKYlBmK2hGaHZUZ2F0bStuMW5GVVQyQmVFa2hWR05DRWxESjZQQUYxTVBmemdRPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzNzc1MTk1CWZpbGU6QWlyUERGXzAuNC4wX3g2NC1zZXR1cC5leGUJdmVyc2lvbjowLjQuMAphY3NTd05aejRuZjRpUGRIVHRwbHlWVHhXN29adjBjVllCcE5wVHdCcnYrNXNiYnpHRTNHd3dXTG9pR0l5QllWUDJXMHlhZWNPMFVFWExGSWdxbFRBZz09Cg==",
+      "url": "https://raw.githubusercontent.com/Geek-ohmtech/air-pdf/main/release/AirPDF_0.4.0_x64-setup.exe"
+    },
+    "windows-x86_64-nsis": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSZ1IvQktHdktZWmJiWXJIZXBXVGRFK3c3UFBjYk15ZEQzSGdXWVVZVGdZUHVIK1d6OUFKYlBmK2hGaHZUZ2F0bStuMW5GVVQyQmVFa2hWR05DRWxESjZQQUYxTVBmemdRPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzNzc1MTk1CWZpbGU6QWlyUERGXzAuNC4wX3g2NC1zZXR1cC5leGUJdmVyc2lvbjowLjQuMAphY3NTd05aejRuZjRpUGRIVHRwbHlWVHhXN29adjBjVllCcE5wVHdCcnYrNXNiYnpHRTNHd3dXTG9pR0l5QllWUDJXMHlhZWNPMFVFWExGSWdxbFRBZz09Cg==",
+      "url": "https://raw.githubusercontent.com/Geek-ohmtech/air-pdf/main/release/AirPDF_0.4.0_x64-setup.exe"
+    }
+  }
+}
