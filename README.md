@@ -1,3 +1,5 @@
+<p align="center"><img src="docs/icon.png" width="96" alt="Air PDF 아이콘"></p>
+
 # Air PDF
 
 > **문서는 가볍게, 작업은 자유롭게**
@@ -125,7 +127,7 @@ npm run desktop:build
 2. 끝나면 실행 기록 아래 **Artifacts**에서 `air-pdf-windows-latest`를 받습니다.
 3. `v0.4.0`처럼 태그를 올리면 같은 파일과 자동 업데이트용 `latest.json`이 GitHub Release 초안에 붙습니다. 초안을 **Publish**해야 사용자 앱이 업데이트를 받습니다.
 
-자동 업데이트 파일 서명에는 비밀 키가 필요합니다. 저장소 **Settings → Secrets and variables → Actions**에 `TAURI_SIGNING_PRIVATE_KEY`(키 파일 내용)와 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`(비워 둔 경우 빈 값)를 넣어 두세요. 공개 키는 `src-tauri/tauri.conf.json`의 `plugins.updater.pubkey`에 있습니다. **비밀 키는 저장소에 올리면 안 되고, 잃어버리면 기존 사용자에게 업데이트를 보낼 수 없습니다.** 자동 업데이트는 저장소가 **공개(Public)**여야 동작합니다.
+자동 업데이트 파일 서명에는 비밀 키가 필요합니다. 저장소 **Settings → Secrets and variables → Actions → New repository secret**에서 이름 `TAURI_SIGNING_PRIVATE_KEY`, 값에 키 파일(`airpdf.key`)을 메모장으로 열어 전체 내용을 붙여 넣으세요. 키에 암호를 걸지 않았으므로 암호용 비밀 값은 넣지 않아도 됩니다. 공개 키는 `src-tauri/tauri.conf.json`의 `plugins.updater.pubkey`에 있습니다. **비밀 키는 저장소에 올리면 안 되고, 잃어버리면 기존 사용자에게 업데이트를 보낼 수 없습니다.** 자동 업데이트는 저장소가 **공개(Public)**여야 동작합니다.
 
 설치 파일은 코드 서명이 되어 있지 않아 Windows에서 처음 실행할 때 SmartScreen이 “Windows의 PC 보호” 창을 띄웁니다. **추가 정보 → 실행**을 누르면 설치됩니다. 널리 배포하려면 코드 서명 인증서로 서명하세요(`bundle.windows.signCommand`).
 

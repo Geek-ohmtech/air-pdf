@@ -65,7 +65,8 @@ jobs:
         if: ${{ matrix.enabled }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # 자동 업데이트 서명 (저장소 Secrets에 넣어 둔다. 없으면 빌드가 실패하니 꼭 넣을 것)
+          # 자동 업데이트 서명: 저장소 Secrets에 TAURI_SIGNING_PRIVATE_KEY를 넣어 둔다 (없으면 빌드가 실패한다).
+          # 키에 암호가 없으면 PASSWORD 비밀 값은 만들지 않아도 된다 (빈 값으로 들어간다).
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
