@@ -12,11 +12,13 @@
 
 | 운영체제 | 파일 |
 |---|---|
-| Windows 10/11 | [**Releases**](https://github.com/Geek-ohmtech/air-pdf/releases/latest)의 `AirPDF_0.4.0_x64-setup.exe` (또는 저장소의 [`release/AirPDF_0.4.0_x64-setup.exe`](release/AirPDF_0.4.0_x64-setup.exe)) |
-| 웹 | [Releases](https://github.com/Geek-ohmtech/air-pdf/releases/latest)의 `air-pdf-web.zip` — 풀어서 아무 정적 웹 서버에 올리면 됩니다 |
+| Windows 10/11 | [`release/AirPDF_0.4.0_x64-setup.exe`](release/AirPDF_0.4.0_x64-setup.exe) — 누른 뒤 오른쪽의 다운로드(↓) 단추 |
+| 웹 | `npm run build`로 만든 `dist/` 폴더를 아무 정적 웹 서버에 올리면 됩니다 (아래 “웹판을 바로 쓸 수 있게 올리기”) |
 | macOS · Linux | 추후 지원 |
 
 한 번 설치하면 다음부터는 **자동 업데이트**됩니다: 켤 때 새 버전을 확인하고, 오른쪽 아래 “지금 업데이트”를 누르면 받아서 다시 시작합니다(메뉴 ⋯ → 업데이트 확인). 업데이트 파일은 서명을 확인한 뒤에만 설치합니다.
+
+> 자동 업데이트는 저장소가 **공개(Public)**일 때 동작합니다. 앱은 먼저 저장소의 [`release/latest.json`](release/latest.json)을, 없으면 GitHub Releases의 `latest.json`을 확인합니다. 새 버전을 내보낼 때는 서명 키로 빌드한 뒤 `node scripts/make-latest.mjs "바뀐 점"`으로 이 파일을 고쳐 설치 파일과 함께 올리면 됩니다.
 
 설치 파일은 코드 서명이 되어 있지 않아 Windows에서 처음 실행할 때 “Windows의 PC 보호” 창이 뜹니다. **추가 정보 → 실행**을 누르면 설치됩니다.
 
