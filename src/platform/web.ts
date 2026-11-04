@@ -87,5 +87,6 @@ export function createWeb(): Platform {
       window.addEventListener('beforeunload', e => { if ((window as any).__dirty) { e.preventDefault(); e.returnValue = ''; } });
     },
     async toggleFullscreen() { document.fullscreenElement ? await document.exitFullscreen() : await document.documentElement.requestFullscreen(); },
+    onFullscreen(cb) { document.addEventListener('fullscreenchange', () => cb(!!document.fullscreenElement)); },
   };
 }

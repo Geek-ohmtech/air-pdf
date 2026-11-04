@@ -26,6 +26,16 @@ export interface Platform {
   defaultApp?: { status(): Promise<boolean | null>; make(): Promise<void> };
   version?(): Promise<string>;
   /** 설치판: 창 테두리를 앱이 직접 그린다 (최소화·최대화·닫기) */
+  /** 설치판: 탭을 다른 창으로 옮기기 (떼어 내기·합치기) */
+  tabs?: {
+    label: string;
+    put(meta: any, bytes: Uint8Array): Promise<number>;
+    take(id: number): Promise<{ meta: any; bytes: Uint8Array }>;
+    windowAt(screenX: number, screenY: number): Promise<string | null>;
+    sendTo(label: string, id: number): Promise<void>;
+    newWindow(id: number, screenX: number, screenY: number, w: number, h: number): Promise<void>;
+    onIncoming(cb: (id: number) => void): void;
+  };
   win?: { minimize(): void; toggleMaximize(): void; close(): void; isMaximized(): Promise<boolean>; onResized(cb: () => void): void };
   checkUpdate?(): Promise<UpdateInfo | null>;
   readPath(path: string): Promise<OpenedFile>;
@@ -35,6 +45,8 @@ export interface Platform {
   openUrl(url: string): void;
   onCloseRequest(cb: () => Promise<boolean>): void;
   toggleFullscreen(): Promise<void>;
+  /** 전체 화면이 바뀔 때 (켜졌는지) */
+  onFullscreen?(cb: (on: boolean) => void): void;
 }
 export type FileKind = 'pdf' | 'png' | 'jpg' | 'zip';
 export const KINDS: Record<FileKind, { mime: string; ext: string[]; label: string }> = {

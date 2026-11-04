@@ -33,6 +33,7 @@ export class App {
   editor: Editor | null = null;
   private start: HTMLElement;
   private winTitle!: HTMLElement;
+  private statusInfo!: HTMLElement; chrome!: HTMLElement;
   private pageInput!: HTMLInputElement; private pageCount!: HTMLElement; private zoomBtn!: HTMLButtonElement;
   private searchInput!: HTMLInputElement; private saveBtn!: HTMLButtonElement; private modeBtns!: HTMLElement;
   private hits: SearchHit[] = []; private hitByPage = new Map<number, SearchHit[]>(); private hitIdx = -1; private lastQuery = '';
@@ -50,12 +51,17 @@ export class App {
     this.stage = h('div', { class: 'stage' });
     const main = h('div', { class: 'main' }, this.stage);
     this.status = h('footer', { class: 'statusbar' });
+    this.statusInfo = h('div', { class: 'st-info' });
     this.tabbar = h('div', { class: 'tabbar', role: 'tablist' });
     this.tabbarWrap = h('div', { class: 'tabbar-wrap', hidden: true }, this.tabbar);
     hscroll(this.tabbarWrap, this.tabbar);
     this.ribbonWrap = h('div', { class: 'ribbon-wrap', hidden: true }, this.ribbon);
     hscroll(this.ribbonWrap, this.ribbon);
-    this.root.append(top, this.tabbarWrap, this.ribbonWrap, main, this.status);
+    // 위쪽 줄들은 한 덩어리 (전체 화면에서 숨겼다가 마우스를 위에 대면 내려온다)
+    this.chrome = h('div', { class: 'chrome' }, top, this.tabbarWrap, this.ribbonWrap);
+    this.status.append(this.statusInfo, this.buildStatusControls());
+    this.root.append(this.chrome, main, this.status);
+    this.bindFullscreen();
     document.body.append(this.root);
     this.view = new DocView(this.stage, engine);
     this.sidebar = new Sidebar(main, this.view);
@@ -93,6 +99,7 @@ export class App {
       else { const t = this.tabs.find(x => x.id === e.docId); const st: any = t?.editorState; if (st) { st.runs?.delete(e.key); st.objs?.delete(e.key); st.annots?.delete(e.key); } }
     });
     platform.onExternalOpen(b => this.handleBatch(b));
+    platform.tabs?.onIncoming(id => this.adoptTransfer(id));
     platform.onCloseRequest(async () => {
       const dirty = this.tabs.filter(t => t.dirty);
       if (!dirty.length) return true;
@@ -260,18 +267,9 @@ export class App {
     const inner = h('div', { class: 'tb-inner' },
       h('div', { class: 'tb-group' },
         this.tb('sidebar', '탐색 패널 (F12)', () => this.toggleSidebar()),
-        h('span', { class: 'brand' }, h('img', { class: 'brand-mark', src: 'icon-64.png', alt: '' }), h('span', { class: 'brand-name' }, 'Air PDF')),
+        h('span', { class: 'brand', 'data-tauri-drag-region': '' }, h('img', { class: 'brand-mark', src: 'icon-64.png', alt: '', 'data-tauri-drag-region': '', draggable: 'false' }), h('span', { class: 'brand-name', 'data-tauri-drag-region': '' }, 'Air PDF')),
         this.tb('open', '열기 (Ctrl+O)', () => this.pickAndOpen()),
         this.saveBtn),
-      h('div', { class: 'tb-group nav-group needs-doc' },
-        this.tb('prev', '이전 페이지 (P)', () => this.goto(this.view.current - 1)),
-        h('label', { class: 'page-box' }, this.pageInput, this.pageCount),
-        this.tb('next', '다음 페이지 (N)', () => this.goto(this.view.current + 1))),
-      h('div', { class: 'tb-group needs-doc zoom-group' },
-        this.tb('minus', '축소 (Ctrl+-)', () => this.zoomStep(-1)),
-        this.zoomBtn,
-        this.tb('plus', '확대 (Ctrl+=)', () => this.zoomStep(1)),
-        this.tb('fit', '페이지 너비 맞춤 (Ctrl+2)', () => this.setFit('width'))),
       h('div', { class: 'tb-spacer', 'data-tauri-drag-region': '' }, this.winTitle = h('span', { class: 'win-title', 'data-tauri-drag-region': '' })),
       h('div', { class: 'search-box needs-doc' }, icon('search'), this.searchInput, optBtn('Aa', 'matchCase', '대소문자 구분'), optBtn('낱말', 'wholeWord', '낱말 단위')),
       h('div', { class: 'tb-group' }, this.modeBtns, h('button', { class: 'tb more-btn', type: 'button', title: '메뉴', 'aria-label': '메뉴', onclick: () => this.mainMenu() }, icon('more'))));
@@ -294,6 +292,38 @@ export class App {
       document.documentElement.classList.add('custom-titlebar');
     }
     return head;
+  }
+  /** 전체 화면: 위쪽 줄들을 숨기고, 마우스를 화면 맨 위에 대면 내려온다 */
+  private bindFullscreen() {
+    const hot = h('div', { class: 'fs-hot', 'aria-hidden': 'true' });
+    document.body.append(hot);
+    let t = 0;
+    // 내려와 있는 동안은 감지 띠를 꺼서 도구줄이 마우스를 받게 한다 (그래야 벗어날 때를 안다)
+    const watch = (e: PointerEvent) => { if (e.clientY > this.chrome.getBoundingClientRect().bottom + 24) hide(); else clearTimeout(t); };
+    const show = () => { clearTimeout(t); this.chrome.classList.add('peek'); hot.style.pointerEvents = 'none'; document.addEventListener('pointermove', watch); };
+    const hide = () => { clearTimeout(t); t = window.setTimeout(() => { if (!this.chrome.matches(':hover') && !this.chrome.contains(document.activeElement) && !document.querySelector('.menu, .color-pop')) { this.chrome.classList.remove('peek'); hot.style.pointerEvents = ''; document.removeEventListener('pointermove', watch); } }, 450); };
+    hot.addEventListener('pointerenter', show);
+    this.chrome.addEventListener('pointerenter', show);
+    this.chrome.addEventListener('pointerleave', hide);
+    this.chrome.addEventListener('focusin', show);
+    this.chrome.addEventListener('focusout', hide);
+    this.platform.onFullscreen?.(on => { this.root.classList.toggle('fs', on); document.body.classList.toggle('fs', on); this.chrome.classList.remove('peek'); if (on) toast('전체 화면 · 마우스를 화면 맨 위에 대면 도구줄이 나옵니다. F11이나 Esc로 끝냅니다.', 3200); });
+  }
+  /** 아래 막대 오른쪽: 페이지 이동 · 확대/축소 · 맞춤 */
+  private buildStatusControls() {
+    const sb = (ic: Parameters<typeof icon>[0], title: string, fn: () => void) => h('button', { class: 'sb', type: 'button', title, 'aria-label': title, onclick: fn }, icon(ic));
+    return h('div', { class: 'st-ctl needs-doc' },
+      h('div', { class: 'sb-group' },
+        sb('prev', '이전 페이지 (PageUp)', () => this.goto(this.view.current - 1)),
+        h('label', { class: 'page-box' }, this.pageInput, this.pageCount),
+        sb('next', '다음 페이지 (PageDown)', () => this.goto(this.view.current + 1))),
+      h('span', { class: 'sb-sep' }),
+      h('div', { class: 'sb-group' },
+        sb('minus', '축소 (Ctrl+-)', () => this.zoomStep(-1)),
+        this.zoomBtn,
+        sb('plus', '확대 (Ctrl+=)', () => this.zoomStep(1)),
+        sb('fit', '페이지 너비 맞춤 (Ctrl+2)', () => this.setFit('width')),
+        sb('fitPage', '페이지 전체 맞춤 (Ctrl+0)', () => this.setFit('page'))));
   }
   private buildStart() {
     const recent = this.platform.recent();
@@ -401,9 +431,9 @@ export class App {
     tab.view = { zoom: this.view.zoom, fit: this.view.fit, top: this.view.el.scrollTop, left: this.view.el.scrollLeft, current: this.view.current };
     if (this.editor) tab.editorState = this.editor.saveState();
   }
-  async closeTab(tab: DocState | null = this.doc) {
+  async closeTab(tab: DocState | null = this.doc, ask = true) {
     if (!tab) return;
-    if (tab.dirty) {
+    if (tab.dirty && ask) {
       const r = await this.askUnsaved([tab]);
       if (r === 'cancel') return;
       if (r === 'save' && !(await this.saveTab(tab, false))) return;
@@ -436,7 +466,8 @@ export class App {
   }
   renderTabs() {
     const bar = this.tabbar;
-    this.tabbarWrap.hidden = this.tabs.length < 2;
+    // 설치판은 탭을 끌어 다른 창으로 옮길 수 있어서 한 개여도 보인다
+    this.tabbarWrap.hidden = this.tabs.length < (this.platform.tabs ? 1 : 2);
     bar.innerHTML = '';
     for (const t of this.tabs) {
       const b = h('div', { class: 'tab' + (t === this.doc ? ' on' : ''), role: 'tab', 'aria-selected': String(t === this.doc), title: t.target?.path || t.name, tabindex: '0' },
@@ -444,12 +475,82 @@ export class App {
         h('span', { class: 'tab-name' }, t.name),
         t.dirty ? h('span', { class: 'tab-dirty', title: '저장하지 않음' }, '●') : null,
         h('button', { class: 'tab-x', type: 'button', title: '닫기 (Ctrl+W)', 'aria-label': t.name + ' 닫기', onclick: (e: Event) => { e.stopPropagation(); this.closeTab(t); } }, icon('close')));
-      b.addEventListener('click', () => this.activate(t));
+      b.addEventListener('click', () => { if (!this.tabSkipClick) this.activate(t); });
+      b.addEventListener('pointerdown', e => this.tabDrag(e, t, b));
       b.addEventListener('auxclick', e => { if ((e as MouseEvent).button === 1) { e.preventDefault(); this.closeTab(t); } });
       b.addEventListener('keydown', e => { if ((e as KeyboardEvent).key === 'Enter') this.activate(t); });
       bar.append(b);
     }
     bar.append(h('button', { class: 'tab-add', type: 'button', title: '다른 PDF 열기 (Ctrl+O)', 'aria-label': '열기', onclick: () => this.pickAndOpen() }, icon('plus')));
+  }
+  private tabSkipClick = false;
+  /**
+   * 탭 끌기: 탭 막대 안에서는 순서 바꾸기.
+   * 설치판에서는 창 밖에 놓으면 새 창으로 떼어 내고, 다른 Air PDF 창 위에 놓으면 그 창의 탭으로 합친다.
+   */
+  private tabDrag(e: PointerEvent, t: DocState, el: HTMLElement) {
+    if (e.button !== 0 || (e.target as HTMLElement).closest('.tab-x')) return;
+    const sx = e.clientX, sy = e.clientY;
+    let started = false, outside = false, to = -1, ghost: HTMLElement | null = null;
+    el.setPointerCapture(e.pointerId);
+    const tabEls = () => [...this.tabbar.querySelectorAll('.tab')] as HTMLElement[];
+    const clear = () => tabEls().forEach(x => x.classList.remove('drop-before', 'drop-after'));
+    const move = (ev: PointerEvent) => {
+      if (!started) { if (Math.hypot(ev.clientX - sx, ev.clientY - sy) < 6) return; started = true; el.classList.add('dragging'); ghost = h('div', { class: 'tab-ghost' }, h('span', {}, t.name), h('small', {})); document.body.append(ghost); }
+      ghost!.style.transform = `translate(${ev.clientX + 12}px, ${ev.clientY + 14}px)`;
+      const r = this.tabbarWrap.getBoundingClientRect();
+      outside = !!this.platform.tabs && (ev.clientY < r.top - 40 || ev.clientY > r.bottom + 70 || ev.clientX < 0 || ev.clientX > innerWidth || ev.clientY < 0 || ev.clientY > innerHeight);
+      ghost!.classList.toggle('out', outside);
+      (ghost!.querySelector('small') as HTMLElement).textContent = outside ? (this.tabs.length > 1 ? '놓으면 새 창으로 · 다른 창 위에 놓으면 합치기' : '다른 Air PDF 창 위에 놓으면 합치기') : '';
+      clear(); to = -1;
+      if (!outside) {
+        const els = tabEls(); to = els.length;
+        for (let i = 0; i < els.length; i++) { const rr = els[i].getBoundingClientRect(); if (ev.clientX < rr.left + rr.width / 2) { to = i; break; } }
+        if (to < els.length) els[to].classList.add('drop-before'); else els[els.length - 1]?.classList.add('drop-after');
+      }
+    };
+    const end = async (ev: PointerEvent) => {
+      el.removeEventListener('pointermove', move); el.removeEventListener('pointerup', end); el.removeEventListener('pointercancel', end);
+      try { el.releasePointerCapture(ev.pointerId); } catch { /* */ }
+      ghost?.remove(); el.classList.remove('dragging'); clear();
+      if (!started || ev.type === 'pointercancel') return;
+      this.tabSkipClick = true; setTimeout(() => this.tabSkipClick = false, 0);
+      if (!outside) {
+        const from = this.tabs.indexOf(t);
+        if (to >= 0 && to !== from && to !== from + 1) { this.tabs.splice(from, 1); this.tabs.splice(to > from ? to - 1 : to, 0, t); this.renderTabs(); }
+        return;
+      }
+      const T = this.platform.tabs; if (!T) return;
+      try {
+        const label = await T.windowAt(ev.screenX, ev.screenY);
+        if (label) await this.moveTabTo(t, label);
+        else if (this.tabs.length > 1) await this.moveTabTo(t, null, ev.screenX, ev.screenY);
+        else toast('탭이 하나뿐인 창은 다른 Air PDF 창 위에 놓아 합칠 수 있습니다.');
+      } catch (err: any) { toast('탭을 옮기지 못했습니다: ' + (err?.message || err)); }
+    };
+    el.addEventListener('pointermove', move); el.addEventListener('pointerup', end); el.addEventListener('pointercancel', end);
+  }
+  /** 탭을 다른 창(label)으로, 또는 새 창(label 없음)으로 옮긴다. 편집 내용과 저장 안 함 표시도 함께 */
+  private async moveTabTo(t: DocState, label: string | null, sx = 0, sy = 0) {
+    const T = this.platform.tabs!;
+    if (t === this.doc) await this.editor?.commitPending();
+    const bytes = await this.engine.call<Uint8Array>('save', [t.id]);
+    const meta = { name: t.name, path: t.target?.path || null, dirty: t.dirty, page: t === this.doc ? this.view.current : t.view?.current || 0 };
+    const id = await T.put(meta, bytes);
+    if (label) await T.sendTo(label, id);
+    else await T.newWindow(id, Math.max(0, sx - 160), Math.max(0, sy - 18), Math.round(innerWidth * 0.9), Math.round(innerHeight * 0.9));
+    await this.closeTab(t, false);
+    if (!this.tabs.length && label) this.platform.win?.close(); // 마지막 탭을 다른 창에 합쳤으면 이 창은 닫는다
+  }
+  /** 다른 창에서 넘어온 탭 열기 */
+  async adoptTransfer(id: number) {
+    const T = this.platform.tabs; if (!T) return;
+    try {
+      const { meta, bytes } = await T.take(id);
+      await this.openOne({ name: meta.name || '문서.pdf', bytes, path: meta.path || undefined }, false);
+      const d = this.doc;
+      if (d) { if (meta.dirty) { d.dirty = true; this.updateTitle(); this.renderTabs(); } if (meta.page) this.goto(meta.page); }
+    } catch (e: any) { toast('탭을 받지 못했습니다: ' + (e?.message || e)); }
   }
   /** 저장하지 않은 문서를 닫을 때: 저장하고 닫기 / 저장하지 않고 닫기 / 취소 */
   private async askUnsaved(tabs: DocState[]): Promise<'save' | 'discard' | 'cancel'> {
@@ -671,17 +772,16 @@ export class App {
   updateStatus() {
     const d = this.doc;
     const selText = this.view.sel ? this.view.selectedText() : '';
-    this.status.innerHTML = '';
+    this.statusInfo.innerHTML = '';
     const parts: (Node | null)[] = [
       h('span', { class: 'st-mode ' + this.mode }, this.mode === 'edit' ? '편집 모드' : '보기 모드'),
-      h('span', { class: 'st-pg' }, d ? `${this.view.current + 1} / ${d.info.pageCount}페이지` : '문서 없음'),
+      d ? null : h('span', { class: 'st-pg' }, '문서 없음'),
       d?.info.encrypted ? h('span', { class: 'st-lock', title: '암호로 보호된 문서' }, icon('lock'), '암호') : null,
       h('span', { class: 'st-hint' }, selText ? `${selText.length}자 선택됨 · Ctrl+C 복사` : (this.mode === 'edit' ? this.editor?.hint() : '') || (d ? (d.formType === 1 ? '입력란을 눌러 바로 입력 · ' : '') + '글자를 끌어 선택 · 빈 곳을 끌어 넘기기 · Ctrl+휠 확대' : '')),
       h('span', { class: 'st-sp' }),
       d && d.size ? h('span', { class: 'st-size' }, fmtSize(d.size)) : null,
-      d ? h('span', { class: 'st-zoom' }, this.zoomPct() + '%') : null,
     ];
-    this.status.append(...parts.filter((x): x is Node => !!x));
+    this.statusInfo.append(...parts.filter((x): x is Node => !!x));
   }
   private docInfo() {
     const d = this.doc!; const i = d.info;
@@ -822,7 +922,7 @@ export class App {
       const typing = t.matches('input, textarea, select, [contenteditable]');
       if (!typing && this.mode === 'edit' && this.editor?.key(e)) return;
       if (S.handle(e, typing)) return;
-      if (!typing && e.key === 'Escape') { this.view.clearSelection(); this.clearSearch(); }
+      if (!typing && e.key === 'Escape') { if (this.root.classList.contains('fs') && !this.view.sel && !this.lastQuery) { this.platform.toggleFullscreen(); return; } this.view.clearSelection(); this.clearSearch(); }
     });
   }
   private bindDrop() {

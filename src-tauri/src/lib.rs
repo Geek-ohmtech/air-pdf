@@ -3,7 +3,8 @@
 //! "연결 프로그램으로 열기"·탐색기 오른쪽 단추 메뉴로 넘어온 파일 경로, 글꼴 목록, 기본 프로그램 지정만 다룬다.
 use serde::Serialize;
 use std::sync::Mutex;
-use tauri::{ipc::Request, ipc::Response, Emitter, Manager, State};
+use tauri::{ipc::Request, ipc::Response, Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder};
+use std::collections::HashMap;
 
 /// 탐색기에서 넘어온 일: mode 없음 = 열기, 있으면 merge / split / to-images / to-pdf
 #[derive(Clone, Serialize, Default)]
@@ -44,15 +45,97 @@ impl Inbox {
 
 /// 화면이 이벤트를 받을 준비가 된 뒤 한 번 부른다: 그동안 모인 파일을 돌려주고, 다음부터는 "open-files" 이벤트로 보낸다
 #[tauri::command]
-fn initial_files(app: tauri::AppHandle, pending: State<Pending>) -> Batch {
+fn initial_files(app: tauri::AppHandle, window: tauri::WebviewWindow, pending: State<Pending>) -> Batch {
     let mut p = pending.0.lock().unwrap();
     p.ready = true;
     let mut list = std::mem::take(&mut p.batches);
     let first = if list.is_empty() { Batch::default() } else { list.remove(0) };
     for b in list {
-        let _ = app.emit("open-files", b); // 나머지 종류는 이벤트로 (화면은 이미 받을 준비가 됐다)
+        let _ = app.emit_to(window.label(), "open-files", b); // 나머지 종류는 이벤트로 (화면은 이미 받을 준비가 됐다)
     }
     first
+}
+
+/// 넘어온 파일을 받을 창: 지금 쓰고 있는(초점이 있는) 창, 없으면 처음 창
+fn target_window(app: &tauri::AppHandle) -> String {
+    let wins = app.webview_windows();
+    if let Some((l, _)) = wins.iter().find(|(_, w)| w.is_focused().unwrap_or(false)) {
+        return l.clone();
+    }
+    if wins.contains_key("main") {
+        return "main".into();
+    }
+    wins.keys().next().cloned().unwrap_or_else(|| "main".into())
+}
+
+/* ───────────── 탭을 다른 창으로 (떼어 내기·합치기) ───────────── */
+
+/// 옮기는 중인 문서 (번호 → 내용, 설명). 받는 창이 한 번 꺼내 가면 지운다
+#[derive(Default)]
+struct Transfers(Mutex<(u64, HashMap<u64, (Vec<u8>, String)>)>);
+
+/// 문서를 맡긴다: 본문은 PDF 바이트, x-meta 머리글은 이름·경로 등(JSON, 퍼센트 인코딩)
+#[tauri::command]
+fn put_transfer(request: Request<'_>, t: State<Transfers>) -> Result<u64, String> {
+    let meta = request
+        .headers()
+        .get("x-meta")
+        .and_then(|v| v.to_str().ok())
+        .map(|v| percent_encoding::percent_decode_str(v).decode_utf8_lossy().into_owned())
+        .unwrap_or_default();
+    let tauri::ipc::InvokeBody::Raw(data) = request.body() else { return Err("옮길 문서가 없습니다".into()) };
+    let mut g = t.0.lock().unwrap();
+    g.0 += 1;
+    let id = g.0;
+    g.1.insert(id, (data.clone(), meta));
+    Ok(id)
+}
+#[tauri::command]
+fn transfer_meta(id: u64, t: State<Transfers>) -> Option<String> {
+    t.0.lock().unwrap().1.get(&id).map(|x| x.1.clone())
+}
+#[tauri::command]
+fn take_transfer(id: u64, t: State<Transfers>) -> Result<Response, String> {
+    t.0.lock().unwrap().1.remove(&id).map(|x| Response::new(x.0)).ok_or_else(|| "옮길 문서를 찾지 못했습니다".into())
+}
+/// 화면 좌표(물리 픽셀) 밑에 있는 다른 Air PDF 창
+#[tauri::command]
+fn window_at(app: tauri::AppHandle, x: f64, y: f64, exclude: String) -> Option<String> {
+    for (label, w) in app.webview_windows() {
+        if label == exclude || w.is_minimized().unwrap_or(false) || !w.is_visible().unwrap_or(true) {
+            continue;
+        }
+        let (Ok(p), Ok(s)) = (w.outer_position(), w.outer_size()) else { continue };
+        if x >= p.x as f64 && x < (p.x + s.width as i32) as f64 && y >= p.y as f64 && y < (p.y + s.height as i32) as f64 {
+            return Some(label);
+        }
+    }
+    None
+}
+/// 맡긴 문서를 다른 창에 탭으로 보낸다
+#[tauri::command]
+fn send_transfer(app: tauri::AppHandle, label: String, id: u64) -> Result<(), String> {
+    let w = app.get_webview_window(&label).ok_or("그 창이 없습니다")?;
+    let _ = w.unminimize();
+    let _ = w.set_focus();
+    app.emit_to(label.as_str(), "take-doc", id).map_err(|e| e.to_string())
+}
+/// 맡긴 문서로 새 창을 연다 (x, y: 창을 놓을 화면 위치, 논리 픽셀)
+#[tauri::command]
+async fn new_window(app: tauri::AppHandle, id: u64, x: f64, y: f64, w: f64, h: f64) -> Result<(), String> {
+    static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1);
+    let label = format!("doc-{}", N.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
+    WebviewWindowBuilder::new(&app, label, WebviewUrl::App("index.html".into()))
+        .initialization_script(&format!("window.__AIRPDF_TRANSFER__ = {id};"))
+        .title("Air PDF")
+        .inner_size(w.max(640.0), h.max(480.0))
+        .min_inner_size(520.0, 400.0)
+        .position(x, y)
+        .decorations(false)
+        .shadow(true)
+        .build()
+        .map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 /// 다른 실행(또는 macOS Finder)에서 넘어온 파일: 화면이 준비됐으면 바로 보내고, 아니면 모아 둔다
@@ -63,7 +146,7 @@ fn deliver(app: &tauri::AppHandle, b: Batch) {
     let Some(p) = app.try_state::<Pending>() else { return };
     let mut p = p.0.lock().unwrap();
     if p.ready {
-        let _ = app.emit("open-files", b);
+        let _ = app.emit_to(target_window(app).as_str(), "open-files", b);
     } else {
         p.add(b);
     }
@@ -307,7 +390,7 @@ pub fn run() {
         // 탐색기에서 여러 파일을 골라 메뉴를 누르면 파일마다 실행되므로, 화면 쪽에서 잠깐 모아서 한 번에 처리한다.
         .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
             deliver(app, parse_args(argv.into_iter().skip(1)));
-            if let Some(w) = app.get_webview_window("main") {
+            if let Some(w) = app.get_webview_window(&target_window(app)) {
                 let _ = w.unminimize();
                 let _ = w.set_focus();
             }
@@ -316,6 +399,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        .manage(Transfers::default())
         .manage(Pending(Mutex::new({
             let mut i = Inbox::default();
             i.add(parse_args(std::env::args().skip(1)));
@@ -333,7 +417,13 @@ pub fn run() {
             write_file,
             list_fonts,
             default_app_status,
-            make_default_app
+            make_default_app,
+            put_transfer,
+            transfer_meta,
+            take_transfer,
+            window_at,
+            send_transfer,
+            new_window
         ])
         .build(tauri::generate_context!())
         .expect("Air PDF를 시작하지 못했습니다");

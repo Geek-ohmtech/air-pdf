@@ -22,6 +22,9 @@ if (batch.files.length) {
   say(batch.files.length > 1 ? `문서 ${batch.files.length}개를 여는 중…` : `“${batch.files[0].name}” 여는 중…`);
   await app.handleBatch(batch);
 }
+// 다른 창에서 떼어 낸 탭으로 연 새 창
+const transfer = (window as any).__AIRPDF_TRANSFER__ ?? new URL(location.href).searchParams.get('transfer');
+if (transfer && platform.tabs) { say('문서를 옮겨 오는 중…'); await app.adoptTransfer(+transfer); }
 hideSplash();
 const params = new URL(location.href).searchParams;
 if (params.get('mode') === 'edit' && app.doc) app.setMode('edit');

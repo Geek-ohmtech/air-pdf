@@ -49,6 +49,7 @@ export const icons = {
   trash: P('<path d="M3.5 5.5h13M8 5.5V3.5h4v2M5.5 5.5l.8 11h7.4l.8-11"/>'),
   pageAdd: P('<path d="M4.5 2.5h7l4 4v11h-11z"/><path d="M10 8.5v6M7 11.5h6"/>'),
   merge: P('<rect x="2.5" y="2.5" width="8" height="10" rx="1"/><path d="M8.5 17.5h8.5v-11"/><path d="M14 2v5M11.5 4.5h5"/>'),
+  fitPage: P('<rect x="5" y="2.5" width="10" height="15" rx="1"/><path d="M2.5 7V3.5h2.5M17.5 7V3.5H15M2.5 13v3.5h2.5M17.5 13v3.5H15" opacity=".7"/>'),
   col1: P('<rect x="6" y="3" width="8" height="5.5" rx="1"/><rect x="6" y="11.5" width="8" height="5.5" rx="1"/>'),
   col2: P('<rect x="3" y="3" width="6" height="5.5" rx="1"/><rect x="11" y="3" width="6" height="5.5" rx="1"/><rect x="3" y="11.5" width="6" height="5.5" rx="1"/><rect x="11" y="11.5" width="6" height="5.5" rx="1"/>'),
   grid: P('<rect x="2.5" y="2.5" width="6" height="7" rx="1"/><rect x="11.5" y="2.5" width="6" height="7" rx="1"/><rect x="2.5" y="11.5" width="6" height="6" rx="1"/><rect x="11.5" y="11.5" width="6" height="6" rx="1"/>'),

@@ -1,8 +1,8 @@
 /** Tauri(Windows / macOS / Linux) */
 import { invoke } from '@tauri-apps/api/core';
-import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { getCurrentWebview } from '@tauri-apps/api/webview';
+import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
 import { open, save } from '@tauri-apps/plugin-dialog';
 import { openUrl, revealItemInDir } from '@tauri-apps/plugin-opener';
 import { getVersion } from '@tauri-apps/api/app';
@@ -56,7 +56,8 @@ export function createDesktop(): Platform {
       return readBatch(await invoke<{ mode: BatchMode | null; files: string[] }>('initial_files'));
     },
     onExternalOpen(cb) {
-      listening = listen<{ mode: BatchMode | null; files: string[] }>('open-files', async e => cb(await readBatch(e.payload)));
+      // 이 창으로 보낸 것만 받는다 (창이 여러 개일 때 한 번만 열리게)
+      listening = getCurrentWebviewWindow().listen<{ mode: BatchMode | null; files: string[] }>('open-files', async e => cb(await readBatch(e.payload)));
     },
     onFileDrag(cb) {
       let paths: string[] = [];
@@ -81,6 +82,19 @@ export function createDesktop(): Platform {
       make: () => invoke('make_default_app'),
     },
     version: () => getVersion(),
+    tabs: {
+      label: getCurrentWebviewWindow().label,
+      async put(meta, bytes) { return invoke<number>('put_transfer', bytes, { headers: { 'x-meta': encodeURIComponent(JSON.stringify(meta)) } }); },
+      async take(id) {
+        const meta = JSON.parse((await invoke<string | null>('transfer_meta', { id })) || '{}');
+        const buf = await invoke<ArrayBuffer>('take_transfer', { id });
+        return { meta, bytes: new Uint8Array(buf) };
+      },
+      windowAt: (sx, sy) => invoke<string | null>('window_at', { x: sx * devicePixelRatio, y: sy * devicePixelRatio, exclude: getCurrentWebviewWindow().label }),
+      sendTo: (label, id) => invoke('send_transfer', { label, id }),
+      newWindow: (id, sx, sy, w, h) => invoke('new_window', { id, x: sx, y: sy, w, h }),
+      onIncoming(cb) { getCurrentWebviewWindow().listen<number>('take-doc', e => cb(e.payload)); },
+    },
     win: {
       minimize: () => { win.minimize(); },
       toggleMaximize: () => { win.toggleMaximize(); },
@@ -116,6 +130,7 @@ export function createDesktop(): Platform {
       win.onCloseRequested(async e => { e.preventDefault(); if (await cb()) await win.destroy(); });
     },
     async toggleFullscreen() { await win.setFullscreen(!(await win.isFullscreen())); },
+    onFullscreen(cb) { let last = false; const check = () => win.isFullscreen().then(on => { if (on !== last) { last = on; cb(on); } }).catch(() => {}); win.onResized(check); },
   };
   return p;
 }
