@@ -16,6 +16,8 @@ export interface Platform {
   /** 실행할 때 받은 파일 (탐색기 메뉴로 실행했으면 mode가 있다) */
   initialFiles(): Promise<Batch>;
   onExternalOpen(cb: (b: Batch) => void): void;
+  /** 설치판: 창에 파일을 끌어 올 때 (화면 좌표는 CSS 픽셀) */
+  onFileDrag?(cb: (e: { type: 'over' | 'drop' | 'leave'; x: number; y: number; paths: string[] }) => void): void;
   /** 여러 파일을 폴더에 저장 (데스크톱) */
   pickFolder?(): Promise<string | null>;
   writeInFolder?(dir: string, name: string, bytes: Uint8Array): Promise<string>;

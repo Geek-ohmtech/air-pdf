@@ -14,9 +14,12 @@ export class EngineClient {
       this.pending.delete(id);
       error ? p.rej(new Error(error)) : p.res(result);
     };
-    this.ready = this.call('boot', [new URL('./', document.baseURI).href]);
+    this.ready = this.call<void>('boot', [new URL('./', document.baseURI).href]).then(() => { this.isReady = true; });
   }
+  private isReady = false;
   call<T = any>(method: string, args: any[] = [], opts: { transfer?: Transferable[]; progress?: (p: any) => void } = {}): Promise<T> {
+    // 엔진이 준비되기 전에 온 일은 준비된 뒤에 보낸다 (화면을 엔진보다 먼저 띄우기 위해)
+    if (method !== 'boot' && !this.isReady) return this.ready.then(() => this.call<T>(method, args, opts));
     const id = ++this.seq;
     return new Promise<T>((res, rej) => {
       this.pending.set(id, { res, rej, progress: opts.progress });

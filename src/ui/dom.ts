@@ -131,13 +131,14 @@ export function busy(msg: string) {
 }
 
 /** 모달 대화상자. 버튼을 누르면 값과 함께 닫힌다 */
-export function dialog<T = any>(opts: { title: string; body?: Node | string; buttons: { label: string; value: T; primary?: boolean; danger?: boolean }[]; onOpen?: (root: HTMLElement) => void; collect?: (root: HTMLElement) => any; wide?: boolean }): Promise<{ value: T; data?: any } | null> {
+export function dialog<T = any>(opts: { title: string; body?: Node | string; head?: Node; buttons: { label: string; value: T; primary?: boolean; danger?: boolean; left?: boolean; act?: () => void }[]; onOpen?: (root: HTMLElement) => void; collect?: (root: HTMLElement) => any; wide?: boolean; cls?: string }): Promise<{ value: T; data?: any } | null> {
   return new Promise(res => {
     const prevFocus = document.activeElement as HTMLElement | null;
-    const card = h('div', { class: 'modal' + (opts.wide ? ' wide' : ''), role: 'dialog', 'aria-modal': 'true', 'aria-label': opts.title },
-      h('h2', {}, opts.title),
-      typeof opts.body === 'string' ? h('p', {}, opts.body) : opts.body || null,
-      h('div', { class: 'modal-actions' }, ...opts.buttons.map(b => h('button', { class: 'btn' + (b.primary ? ' primary' : '') + (b.danger ? ' danger' : ''), type: 'button', dataset: { i: String(opts.buttons.indexOf(b)) } }, b.label))));
+    // 제목과 단추는 고정, 가운데만 스크롤
+    const card = h('div', { class: 'modal' + (opts.wide ? ' wide' : '') + (opts.cls ? ' ' + opts.cls : ''), role: 'dialog', 'aria-modal': 'true', 'aria-label': opts.title },
+      h('div', { class: 'modal-head' }, h('h2', {}, opts.title), opts.head || null),
+      h('div', { class: 'modal-body' }, typeof opts.body === 'string' ? h('p', {}, opts.body) : opts.body || null),
+      h('div', { class: 'modal-actions' }, ...opts.buttons.map(b => h('button', { class: 'btn' + (b.primary ? ' primary' : '') + (b.danger ? ' danger' : '') + (b.left ? ' left' : ''), type: 'button', dataset: { i: String(opts.buttons.indexOf(b)) } }, b.label))));
     const back = h('div', { class: 'modal-back' }, card);
     const close = (v: { value: T; data?: any } | null) => { back.remove(); document.removeEventListener('keydown', key, true); prevFocus?.focus?.(); res(v); };
     const key = (e: KeyboardEvent) => {
@@ -149,6 +150,7 @@ export function dialog<T = any>(opts: { title: string; body?: Node | string; but
     card.addEventListener('click', e => {
       const b = (e.target as HTMLElement).closest('[data-i]') as HTMLElement | null; if (!b) return;
       const btn = opts.buttons[+b.dataset.i!];
+      if (btn.act) { btn.act(); return; }
       close({ value: btn.value, data: opts.collect?.(card) });
     });
     back.addEventListener('pointerdown', e => { if (e.target === back) close(null); });

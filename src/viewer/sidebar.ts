@@ -61,7 +61,7 @@ export class Sidebar {
     const W = 118;
     this.view.pages.forEach((p, i) => {
       const hgt = Math.round(W * p.h / p.w);
-      const item = h('div', { class: 'thumb' + (this.selected.has(p.key) ? ' picked' : ''), dataset: { i: String(i), key: String(p.key) }, draggable: this.editable ? 'true' : undefined, title: `${i + 1}쪽` },
+      const item = h('div', { class: 'thumb' + (this.selected.has(p.key) ? ' picked' : ''), dataset: { i: String(i), key: String(p.key) }, title: `${i + 1}쪽` },
         h('div', { class: 'thumb-paper', style: { width: W + 'px', height: Math.min(hgt, 170) + 'px' } }, h('canvas', {})),
         h('span', { class: 'thumb-num' }, String(i + 1)));
       this.thumbList.append(item);
@@ -90,9 +90,82 @@ export class Sidebar {
     const it = this.thumbList.children[i] as HTMLElement | undefined;
     if (it) { it.classList.add('current'); if (this.tab === 'thumbs' && !this.el.hidden) it.scrollIntoView({ block: 'nearest' }); }
   }
+  /* ───────────── 끌어 놓을 자리 (설치판에서 파일을 끌어 올 때도 씀) ───────────── */
+  /** 화면 좌표가 쪽 목록 위면 넣을 자리(0~쪽 수), 아니면 null */
+  dropIndexAt(x: number, y: number): number | null {
+    if (this.el.hidden || this.tab !== 'thumbs' || !this.view.pages.length) return null;
+    const lr = this.body.getBoundingClientRect();
+    if (x < lr.left || x > lr.right || y < lr.top || y > lr.bottom) return null;
+    const items = [...this.thumbList.querySelectorAll('.thumb')] as HTMLElement[];
+    for (const it of items) {
+      const r = it.getBoundingClientRect();
+      if (y < r.top + r.height / 2) return +it.dataset.i!;
+      if (y <= r.bottom) return +it.dataset.i! + 1;
+    }
+    return this.view.pages.length;
+  }
+  markDropAt(x: number, y: number) {
+    this.clearDropMarks();
+    const at = this.dropIndexAt(x, y); if (at === null) return null;
+    const items = this.thumbList.querySelectorAll('.thumb');
+    if (at < items.length) items[at].classList.add('drop-before'); else items[items.length - 1]?.classList.add('drop-after');
+    return at;
+  }
+  clearDropMarks() { this.thumbList.querySelectorAll('.drop-before, .drop-after').forEach(x => x.classList.remove('drop-before', 'drop-after')); }
+
   private bindThumbs() {
-    let anchor = -1, dragKey = -1;
+    let anchor = -1;
+    // 순서 바꾸기는 마우스로 직접 처리한다 (설치판 Windows에서는 HTML 끌어 놓기가 막혀 있어서)
+    let pd: { key: number; x: number; y: number; el: HTMLElement; started: boolean; ghost?: HTMLElement; scroll?: number } | null = null;
+    let skipClick = false;
+    const endDrag = () => {
+      if (!pd) return;
+      pd.el.classList.remove('dragging'); pd.ghost?.remove(); if (pd.scroll) cancelAnimationFrame(pd.scroll);
+      this.clearDropMarks(); document.body.classList.remove('thumb-dragging'); pd = null;
+    };
+    this.thumbList.addEventListener('pointerdown', e => {
+      if (e.button !== 0 || !this.editable) return;
+      const it = (e.target as HTMLElement).closest('.thumb') as HTMLElement | null; if (!it) return;
+      pd = { key: +it.dataset.key!, x: e.clientX, y: e.clientY, el: it, started: false };
+    });
+    window.addEventListener('pointermove', e => {
+      if (!pd) return;
+      if (!pd.started) {
+        if (Math.hypot(e.clientX - pd.x, e.clientY - pd.y) < 6) return;
+        pd.started = true; pd.el.classList.add('dragging'); document.body.classList.add('thumb-dragging');
+        const cv = pd.el.querySelector('canvas') as HTMLCanvasElement | null;
+        pd.ghost = h('div', { class: 'thumb-ghost' }, cv && cv.width ? (() => { const c = h('canvas', {}) as HTMLCanvasElement; c.width = cv.width; c.height = cv.height; c.getContext('2d')!.drawImage(cv, 0, 0); return c; })() : null, h('span', {}, `${+pd.el.dataset.i! + 1}쪽`));
+        document.body.append(pd.ghost);
+        // 목록 가장자리에 가면 저절로 넘긴다
+        const tick = () => {
+          if (!pd) return;
+          const r = this.body.getBoundingClientRect(), y = (pd as any).cy ?? 0;
+          if (y < r.top + 40) this.body.scrollTop -= 12; else if (y > r.bottom - 40) this.body.scrollTop += 12;
+          pd.scroll = requestAnimationFrame(tick);
+        };
+        pd.scroll = requestAnimationFrame(tick);
+      }
+      (pd as any).cy = e.clientY;
+      pd.ghost!.style.transform = `translate(${e.clientX + 12}px, ${e.clientY + 10}px)`;
+      this.markDropAt(e.clientX, e.clientY);
+    });
+    window.addEventListener('pointerup', e => {
+      if (!pd) return;
+      if (pd.started) {
+        const at = this.dropIndexAt(e.clientX, e.clientY), key = pd.key;
+        skipClick = true; setTimeout(() => skipClick = false, 0);
+        endDrag();
+        if (at !== null) {
+          const from = this.view.pages.findIndex(p => p.key === key);
+          const to = from < at ? at - 1 : at;
+          if (to !== from) this.onMovePage(key, to);
+        }
+      } else pd = null;
+    });
+    window.addEventListener('keydown', e => { if (e.key === 'Escape' && pd?.started) endDrag(); });
+    window.addEventListener('blur', endDrag);
     this.thumbList.addEventListener('click', e => {
+      if (skipClick) return;
       const it = (e.target as HTMLElement).closest('.thumb') as HTMLElement | null; if (!it) return;
       const i = +it.dataset.i!, key = +it.dataset.key!;
       if (this.editable && (e.ctrlKey || e.metaKey)) { this.selected.has(key) ? this.selected.delete(key) : this.selected.add(key); anchor = i; }
@@ -121,10 +194,6 @@ export class Sidebar {
       if (!this.selected.has(key)) { this.selected.clear(); this.selected.add(key); this.paintPicked(); }
       this.onThumbMenu(e, +it.dataset.i!);
     });
-    this.thumbList.addEventListener('dragstart', e => {
-      const it = (e.target as HTMLElement).closest('.thumb') as HTMLElement | null; if (!it || !this.editable) return;
-      dragKey = +it.dataset.key!; it.classList.add('dragging'); e.dataTransfer!.effectAllowed = 'move'; e.dataTransfer!.setData('text/plain', String(dragKey));
-    });
     const clearMarks = () => this.thumbList.querySelectorAll('.drop-before, .drop-after, .dragging').forEach(x => x.classList.remove('drop-before', 'drop-after', 'dragging'));
     const isFiles = (e: DragEvent) => [...(e.dataTransfer?.types || [])].includes('Files');
     const dropIndex = (e: DragEvent) => {
@@ -144,11 +213,6 @@ export class Sidebar {
         else last?.classList.add('drop-after');
         return;
       }
-      if (dragKey < 0) return; e.preventDefault(); e.stopPropagation();
-      const it = (e.target as HTMLElement).closest('.thumb') as HTMLElement | null;
-      this.thumbList.querySelectorAll('.drop-before, .drop-after').forEach(x => x.classList.remove('drop-before', 'drop-after'));
-      if (!it) return;
-      const r = it.getBoundingClientRect(); it.classList.add(e.clientY < r.top + r.height / 2 ? 'drop-before' : 'drop-after');
     });
     this.thumbList.addEventListener('dragleave', e => { if (!this.thumbList.contains(e.relatedTarget as Node)) { document.body.classList.remove('drop-in-thumbs'); clearMarks(); } });
     this.thumbList.addEventListener('drop', e => {
@@ -160,17 +224,7 @@ export class Sidebar {
         this.onDropFiles([...e.dataTransfer!.files], at);
         return;
       }
-      if (dragKey < 0) return; e.preventDefault(); e.stopPropagation();
-      const it = (e.target as HTMLElement).closest('.thumb') as HTMLElement | null;
-      if (it && +it.dataset.key! !== dragKey) {
-        const from = this.view.pages.findIndex(p => p.key === dragKey);
-        let to = +it.dataset.i! + (it.classList.contains('drop-after') ? 1 : 0);
-        if (from < to) to--;
-        this.onMovePage(dragKey, to);
-      }
-      clearMarks(); dragKey = -1;
     });
-    this.thumbList.addEventListener('dragend', () => { clearMarks(); dragKey = -1; });
   }
   paintPicked() { this.thumbList.querySelectorAll('.thumb').forEach(t => t.classList.toggle('picked', this.selected.has(+(t as HTMLElement).dataset.key!))); }
   /** 편집 대상 쪽: 고른 쪽이 있으면 그것, 없으면 현재 쪽 */

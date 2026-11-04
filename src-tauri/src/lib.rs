@@ -12,13 +12,50 @@ struct Batch {
     files: Vec<String>,
 }
 
+/// 화면이 준비되기 전에 들어온 파일은 여기 모아 둔다.
+/// 프로그램이 꺼진 상태에서 파일 여러 개로 "합치기"를 누르면 파일마다 실행되는데,
+/// 화면이 아직 이벤트를 받을 수 없는 동안 넘어온 파일을 놓치지 않기 위해서다.
 #[derive(Default)]
-struct Pending(Mutex<Batch>);
+struct Inbox {
+    ready: bool,
+    batch: Batch,
+}
+#[derive(Default)]
+struct Pending(Mutex<Inbox>);
 
-/// 처음 실행될 때 받은 파일 (다음부터는 "open-files" 이벤트로 온다)
+impl Inbox {
+    fn add(&mut self, b: Batch) {
+        if self.batch.mode.is_none() {
+            self.batch.mode = b.mode;
+        }
+        for f in b.files {
+            if !self.batch.files.contains(&f) {
+                self.batch.files.push(f);
+            }
+        }
+    }
+}
+
+/// 화면이 이벤트를 받을 준비가 된 뒤 한 번 부른다: 그동안 모인 파일을 돌려주고, 다음부터는 "open-files" 이벤트로 보낸다
 #[tauri::command]
 fn initial_files(pending: State<Pending>) -> Batch {
-    std::mem::take(&mut *pending.0.lock().unwrap())
+    let mut p = pending.0.lock().unwrap();
+    p.ready = true;
+    std::mem::take(&mut p.batch)
+}
+
+/// 다른 실행(또는 macOS Finder)에서 넘어온 파일: 화면이 준비됐으면 바로 보내고, 아니면 모아 둔다
+fn deliver(app: &tauri::AppHandle, b: Batch) {
+    if b.files.is_empty() {
+        return;
+    }
+    let Some(p) = app.try_state::<Pending>() else { return };
+    let mut p = p.0.lock().unwrap();
+    if p.ready {
+        let _ = app.emit("open-files", b);
+    } else {
+        p.add(b);
+    }
 }
 
 /// 파일을 그대로 바이트로 돌려준다 (JSON으로 바꾸지 않아 큰 PDF도 빠르다)
@@ -233,10 +270,7 @@ pub fn run() {
         // 이미 켜져 있으면 새 창을 띄우지 않고 그 창에 탭으로 연다.
         // 탐색기에서 여러 파일을 골라 메뉴를 누르면 파일마다 실행되므로, 화면 쪽에서 잠깐 모아서 한 번에 처리한다.
         .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
-            let b = parse_args(argv.into_iter().skip(1));
-            if !b.files.is_empty() {
-                let _ = app.emit("open-files", b);
-            }
+            deliver(app, parse_args(argv.into_iter().skip(1)));
             if let Some(w) = app.get_webview_window("main") {
                 let _ = w.unminimize();
                 let _ = w.set_focus();
@@ -246,7 +280,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
-        .manage(Pending(Mutex::new(parse_args(std::env::args().skip(1)))))
+        .manage(Pending(Mutex::new(Inbox { ready: false, batch: parse_args(std::env::args().skip(1)) })))
         .invoke_handler(tauri::generate_handler![
             initial_files,
             read_file,
@@ -267,10 +301,7 @@ pub fn run() {
                 .filter_map(|u| u.to_file_path().ok())
                 .map(|p| p.to_string_lossy().into_owned())
                 .collect();
-            if let Some(p) = handle.try_state::<Pending>() {
-                p.0.lock().unwrap().files.extend(files.clone());
-            }
-            let _ = handle.emit("open-files", Batch { mode: None, files });
+            deliver(handle, Batch { mode: None, files });
         }
         let _ = (&handle, &event);
     });
@@ -278,7 +309,15 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_args;
+    use super::{parse_args, Batch, Inbox};
+    #[test]
+    fn inbox_collects_before_ready() {
+        let mut i = Inbox::default();
+        i.add(Batch { mode: Some("merge".into()), files: vec!["a.pdf".into()] });
+        i.add(Batch { mode: Some("merge".into()), files: vec!["b.pdf".into(), "a.pdf".into()] });
+        assert_eq!(i.batch.mode.as_deref(), Some("merge"));
+        assert_eq!(i.batch.files, vec!["a.pdf".to_string(), "b.pdf".to_string()]);
+    }
     fn v(a: &[&str]) -> Vec<String> { a.iter().map(|s| s.to_string()).collect() }
     #[test]
     fn modes_and_files() {

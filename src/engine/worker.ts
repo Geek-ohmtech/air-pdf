@@ -10,10 +10,22 @@ let base = '';
 const vendor = (p: string) => new URL('vendor/' + p, base).href;
 const FONT = 'fonts/NotoSansKR-Regular.ttf';
 
+// 워커가 뜨자마자 엔진(WebAssembly)을 받으면서 바로 컴파일해 둔다 (받기와 컴파일이 겹쳐서 빨라진다)
+const WASM = new URL(wasmUrl, self.location.href).href;
+const compiled: Promise<WebAssembly.Module> = (async () => {
+  try { return await WebAssembly.compileStreaming(fetch(WASM)); }
+  catch { return WebAssembly.compile(await (await fetch(WASM)).arrayBuffer()); } // 서버가 wasm 형식을 안 알려 줄 때
+})();
+
 async function boot(b: string) {
   base = b;
-  const wasm = await (await fetch(new URL(wasmUrl, self.location.href).href)).arrayBuffer();
-  const P = await init({ wasmBinary: wasm } as any);
+  const mod = await compiled;
+  const P = await init({
+    instantiateWasm: (imports: WebAssembly.Imports, done: (i: WebAssembly.Instance, m: WebAssembly.Module) => void) => {
+      WebAssembly.instantiate(mod, imports).then(inst => done(inst, mod));
+      return {};
+    },
+  } as any);
   let fontBytes: Uint8Array | null = null;
   const kit = new FontKit({
     font: async () => fontBytes || (fontBytes = new Uint8Array(await (await fetch(vendor(FONT))).arrayBuffer())),
@@ -29,6 +41,8 @@ async function boot(b: string) {
     fetchFont: async (file: string) => { const r = await fetch(vendor('fonts/' + file)); if (!r.ok) throw new Error('글꼴 파일을 찾지 못했습니다: ' + file); return new Uint8Array(await r.arrayBuffer()); },
   });
   engine = new PdfEngine(P, kit);
+  // 글꼴을 넣지 않은 한글 PDF가 많아서, 대체 글꼴은 엔진이 준비된 뒤 미리 읽어 둔다 (첫 쪽 그리기가 멈추지 않게)
+  setTimeout(() => { if (!fontBytes) fetch(vendor(FONT)).then(r => r.ok ? r.arrayBuffer() : null).then(b => { if (b && !fontBytes) fontBytes = new Uint8Array(b); }).catch(() => {}); }, 150);
 }
 
 self.onmessage = async (ev: MessageEvent) => {

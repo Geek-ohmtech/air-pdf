@@ -8,6 +8,7 @@ import { DocView } from './viewer/docview.ts';
 import { Sidebar } from './viewer/sidebar.ts';
 import { $, busy, confirmBox, dialog, esc, h, hscroll, icon, menu, promptBox, toast } from './ui/dom.ts';
 import type { Editor } from './editor/editor.ts';
+import THEMES from './theme-list.json';
 
 export interface DocState {
   id: number; info: DocInfo; name: string; target: SavedTarget | null; dirty: boolean; size: number; formType: number;
@@ -33,7 +34,7 @@ export class App {
   private searchInput!: HTMLInputElement; private saveBtn!: HTMLButtonElement; private modeBtns!: HTMLElement;
   private hits: SearchHit[] = []; private hitByPage = new Map<number, SearchHit[]>(); private hitIdx = -1; private lastQuery = '';
   private searchOpts = { matchCase: false, wholeWord: false };
-  prefs: { theme: string; spread: boolean; night: boolean; sidebar: boolean; author: string; shortcuts?: Record<string, string[]>; autoUpdate?: boolean } = { theme: 'system', spread: false, night: false, sidebar: true, author: '' };
+  prefs: { theme: string; spread: boolean; night: boolean; sidebar: boolean; author: string; shortcuts?: Record<string, string[]>; autoUpdate?: boolean; accent?: string } = { theme: 'system', spread: false, night: false, sidebar: true, author: '' };
 
   constructor(engine: EngineClient, platform: Platform) {
     this.engine = engine; this.platform = platform;
@@ -89,17 +90,17 @@ export class App {
     if (platform.checkUpdate && this.prefs.autoUpdate !== false) setTimeout(() => this.checkUpdate(false), 4000);
   }
   /* ───────────── 탐색기에서 넘어온 일 ───────────── */
-  private batchBuf: { mode: BatchMode; files: OpenedFile[] } | null = null; private batchT = 0;
+  private batchBuf: { mode: BatchMode; files: OpenedFile[] } | null = null; private batchT = 0; private batchDone: (() => void) | null = null;
   /** 여러 파일을 골라 탐색기 메뉴를 누르면 파일마다 따로 들어오므로, 잠깐 모았다가 한 번에 처리한다 */
   async handleBatch(b: Batch) {
     if (!b.mode) { if (b.files.length) await this.openFiles(b.files); return; }
     if (this.batchBuf && this.batchBuf.mode !== b.mode) this.flushBatch();
-    if (!this.batchBuf) this.batchBuf = { mode: b.mode, files: [] };
+    if (!this.batchBuf) { this.batchBuf = { mode: b.mode, files: [] }; this.batchDone = this.loading('탐색기에서 고른 파일을 모으는 중…'); }
     for (const f of b.files) if (!this.batchBuf.files.some(x => x.path && x.path === f.path)) this.batchBuf.files.push(f);
-    clearTimeout(this.batchT); this.batchT = window.setTimeout(() => this.flushBatch(), 700);
+    clearTimeout(this.batchT); this.batchT = window.setTimeout(() => this.flushBatch(), 1200);
   }
   private flushBatch() {
-    const b = this.batchBuf; this.batchBuf = null; clearTimeout(this.batchT);
+    const b = this.batchBuf; this.batchBuf = null; clearTimeout(this.batchT); this.batchDone?.(); this.batchDone = null;
     if (!b?.files.length) return;
     const by = (a: OpenedFile, c: OpenedFile) => a.name.localeCompare(c.name, 'ko', { numeric: true });
     const files = [...b.files].sort(by);
@@ -149,8 +150,43 @@ export class App {
   }
   savePrefs() { try { localStorage.setItem(PREF, JSON.stringify(this.prefs)); } catch { /* */ } }
   applyTheme() {
-    const t = this.prefs.theme;
-    if (t === 'system') document.documentElement.removeAttribute('data-theme'); else document.documentElement.setAttribute('data-theme', t);
+    const t = this.prefs.theme, el = document.documentElement;
+    if (t === 'system') el.removeAttribute('data-theme'); else el.setAttribute('data-theme', t);
+    const a = this.prefs.accent || 'air';
+    if (a === 'blue') el.removeAttribute('data-accent'); else el.setAttribute('data-accent', a);
+  }
+  /** 테마: 밝기 + 강조색. 고르는 즉시 바뀌고, 취소하면 되돌린다 */
+  async themeDialog() {
+    const before = { theme: this.prefs.theme, accent: this.prefs.accent };
+    const body = h('div', { class: 'form' });
+    const draw = () => {
+      body.innerHTML = '';
+      const modes: [string, string, string][] = [['system', '시스템 설정 따르기', 'linear-gradient(90deg,#f4f5f8 50%,#1d2027 50%)'], ['light', '밝게', '#f4f5f8'], ['dark', '어둡게', '#1d2027']];
+      body.append(h('label', { class: 'lbl' }, '화면 밝기'), h('div', { class: 'theme-row' }, ...modes.map(([v, l, bg]) =>
+        h('button', { class: 'theme-opt', type: 'button', 'aria-pressed': String(this.prefs.theme === v), onclick: () => { this.prefs.theme = v; this.applyTheme(); draw(); } }, h('span', { class: 'theme-mode', style: { background: bg } }), l))));
+      const dark = document.documentElement.getAttribute('data-theme') === 'dark' || (this.prefs.theme === 'system' && matchMedia('(prefers-color-scheme: dark)').matches);
+      body.append(h('label', { class: 'lbl' }, '강조색'), h('div', { class: 'theme-row' }, ...Object.entries(THEMES).map(([k, v]: [string, any]) =>
+        h('button', { class: 'theme-opt', type: 'button', 'aria-pressed': String((this.prefs.accent || 'air') === k), onclick: () => { this.prefs.accent = k; this.applyTheme(); draw(); } }, h('span', { class: 'theme-dot', style: { background: dark ? v.dark : v.light } }), v.name))));
+      body.append(h('p', { class: 'hint' }, '편집 모드의 주황색 띠는 “고치는 중”을 알리는 표시라 그대로 둡니다.'));
+    };
+    draw();
+    const r = await dialog({ title: '테마', body, wide: true, buttons: [{ label: '취소', value: false }, { label: '적용', value: true, primary: true }] });
+    if (r?.value) this.savePrefs(); else { this.prefs.theme = before.theme; this.prefs.accent = before.accent; this.applyTheme(); }
+  }
+  /** Air PDF 정보: 버전, 업데이트 확인 */
+  async about() {
+    const ver = this.platform.version ? await this.platform.version().catch(() => '') : '';
+    const dark = document.documentElement.getAttribute('data-theme') === 'dark' || (this.prefs.theme === 'system' && matchMedia('(prefers-color-scheme: dark)').matches);
+    const body = h('div', { class: 'about' }, h('img', { src: dark ? 'logo-dark.png' : 'logo.png', alt: 'Air PDF' }),
+      h('p', { class: 'start-slogan' }, '문서는 가볍게, 작업은 자유롭게'),
+      h('p', { class: 'ver' }, ver ? `버전 ${ver}` : '웹판'),
+      h('p', { class: 'hint' }, 'PDFium 엔진 · MIT 라이선스'));
+    const r = await dialog({ title: 'Air PDF 정보', body, buttons: [
+      { label: 'GitHub 페이지', value: 'gh', left: true },
+      ...(this.platform.checkUpdate ? [{ label: '업데이트 확인', value: 'up' }] : []),
+      { label: '닫기', value: 'close', primary: true }] });
+    if (r?.value === 'gh') this.platform.openUrl('https://github.com/Geek-ohmtech/air-pdf');
+    else if (r?.value === 'up') this.checkUpdate(true);
   }
 
   /* ───────────── 화면 구성 ───────────── */
@@ -217,7 +253,24 @@ export class App {
   async pickAndOpen() { const files = await this.platform.pickPdfs(true); if (files.length) this.openFiles(files); }
   /** 파일마다 새 탭으로 연다. unsaved: 아직 저장 위치가 없는 사본(압축본 등) */
   async openFiles(files: OpenedFile[], unsaved = false) {
-    for (const f of files) await this.openOne(f, unsaved);
+    const done = this.loading(files.length > 1 ? `문서 ${files.length}개를 여는 중…` : `“${files[0]?.name}” 여는 중…`);
+    try { for (const f of files) await this.openOne(f, unsaved); }
+    finally { requestAnimationFrame(done); }
+  }
+  /** 위쪽 로딩 바 (짧게 끝나면 보이지 않는다). 끝나면 돌려받은 함수를 부른다 */
+  loading(label: string) {
+    let bar = document.getElementById('load-bar');
+    if (!bar) { bar = h('div', { id: 'load-bar', class: 'load-bar', role: 'progressbar', 'aria-label': '불러오는 중' }, h('i', {})); document.body.append(bar); }
+    const n = +(bar.dataset.n || 0) + 1; bar.dataset.n = String(n); bar.title = label; bar.classList.add('on');
+    const st = this.status.querySelector('.st-hint') as HTMLElement | null, prev = st?.textContent;
+    if (st) st.textContent = label;
+    let ended = false;
+    return () => {
+      if (ended) return; ended = true;
+      const m = +(bar!.dataset.n || 1) - 1; bar!.dataset.n = String(m);
+      if (m <= 0) bar!.classList.remove('on');
+      if (st && st.textContent === label) { st.textContent = prev || ''; this.updateStatus(); }
+    };
   }
   private async openOne(f: OpenedFile, unsaved: boolean) {
     if (f.path) { const ex = this.tabs.find(t => t.target?.path === f.path); if (ex) { await this.activate(ex); return; } }
@@ -522,9 +575,10 @@ export class App {
       { label: '두 쪽씩 보기', icon: 'spread', action: () => { this.prefs.spread = !this.prefs.spread; this.savePrefs(); this.view.setSpread(this.prefs.spread); }, checked: this.prefs.spread },
       { label: '야간 보기 (색 반전)', icon: 'moon', action: () => { this.prefs.night = !this.prefs.night; this.savePrefs(); this.view.setNight(this.prefs.night); }, checked: this.prefs.night },
       { label: '전체 화면', icon: 'full', hint: 'F11', action: () => this.platform.toggleFullscreen() },
-      { label: '화면 테마: ' + ({ system: '시스템', light: '밝게', dark: '어둡게' } as any)[this.prefs.theme], icon: 'theme', action: () => { this.prefs.theme = this.prefs.theme === 'system' ? 'light' : this.prefs.theme === 'light' ? 'dark' : 'system'; this.applyTheme(); this.savePrefs(); } }, '-',
+      { label: '테마…', icon: 'theme', hint: ({ system: '시스템', light: '밝게', dark: '어둡게' } as any)[this.prefs.theme], action: () => this.themeDialog() }, '-',
       { label: '문서 정보', icon: 'info', action: () => this.docInfo(), disabled: !this.doc },
       { label: '단축키', icon: 'keyboard', hint: 'F1', action: () => this.showShortcuts() },
+      { label: 'Air PDF 정보', icon: 'info', action: () => this.about() },
       ...(this.platform.defaultApp ? ['-' as const, { label: '기본 PDF 프로그램으로 지정…', icon: 'pin' as const, action: () => this.makeDefault() }] : []),
       ...(this.platform.checkUpdate ? [{ label: '업데이트 확인', icon: 'update' as const, action: () => this.checkUpdate(true) },
         { label: '자동으로 업데이트 확인', icon: 'update' as const, checked: this.prefs.autoUpdate !== false, action: () => { this.prefs.autoUpdate = this.prefs.autoUpdate === false; this.savePrefs(); } }] : []),
@@ -633,8 +687,12 @@ export class App {
       { id: 'spread', group: '보기', label: '두 쪽씩 보기', keys: ['Ctrl+3'], run: () => { this.prefs.spread = !this.prefs.spread; this.savePrefs(); this.view.setSpread(this.prefs.spread); }, when: doc },
       { id: 'night', group: '보기', label: '야간 보기', keys: ['Ctrl+Shift+Y'], run: () => { this.prefs.night = !this.prefs.night; this.savePrefs(); this.view.setNight(this.prefs.night); } },
       { id: 'keys', group: '보기', label: '단축키 보기·바꾸기', keys: ['F1', '?'], run: () => this.showShortcuts() },
-      { id: 'nextPage', group: '이동', label: '다음 쪽', keys: ['N', 'ArrowRight'], run: () => this.goto(this.view.current + 1), when: () => noHScroll() && this.mode === 'view' },
-      { id: 'prevPage', group: '이동', label: '이전 쪽', keys: ['P', 'ArrowLeft'], run: () => this.goto(this.view.current - 1), when: () => noHScroll() && this.mode === 'view' },
+      { id: 'nextPage', group: '이동', label: '다음 쪽', keys: ['PageDown'], run: () => this.goto(this.view.current + 1), when: doc },
+      { id: 'prevPage', group: '이동', label: '이전 쪽', keys: ['PageUp'], run: () => this.goto(this.view.current - 1), when: doc },
+      { id: 'nextPageArrow', group: '이동', label: '다음 쪽 (→, 고른 것이 없을 때)', keys: ['ArrowRight'], run: () => this.goto(this.view.current + 1), when: noHScroll },
+      { id: 'prevPageArrow', group: '이동', label: '이전 쪽 (←, 고른 것이 없을 때)', keys: ['ArrowLeft'], run: () => this.goto(this.view.current - 1), when: noHScroll },
+      { id: 'nextPageN', group: '이동', label: '다음 쪽 (보기 모드)', keys: ['N'], run: () => this.goto(this.view.current + 1), when: () => doc() && this.mode === 'view' },
+      { id: 'prevPageP', group: '이동', label: '이전 쪽 (보기 모드)', keys: ['P'], run: () => this.goto(this.view.current - 1), when: () => doc() && this.mode === 'view' },
       { id: 'nextPage2', group: '이동', label: '다음 쪽 (편집 모드에서도)', keys: ['Alt+ArrowDown'], run: () => this.goto(this.view.current + 1), when: doc },
       { id: 'prevPage2', group: '이동', label: '이전 쪽 (편집 모드에서도)', keys: ['Alt+ArrowUp'], run: () => this.goto(this.view.current - 1), when: doc },
       { id: 'first', group: '이동', label: '첫 쪽', keys: ['Home', 'Ctrl+Home'], run: () => this.goto(0), when: doc },
@@ -684,6 +742,27 @@ export class App {
     window.addEventListener('dragleave', e => { if (!isFiles(e)) return; if (--depth <= 0) { depth = 0; zone.hidden = true; } });
     window.addEventListener('dragover', e => { if (isFiles(e)) e.preventDefault(); });
     window.addEventListener('airpdf-drop-done', () => { depth = 0; zone.hidden = true; document.body.classList.remove('drop-in-thumbs'); });
+    // 설치판: 파일 끌어 놓기는 운영체제가 직접 알려 준다 (경로와 위치)
+    this.platform.onFileDrag?.(async ev => {
+      const canInsert = !!this.doc && this.doc.formType < 2;
+      if (ev.type === 'over') {
+        const at = canInsert ? this.sidebar.markDropAt(ev.x, ev.y) : null;
+        zone.hidden = at !== null; document.body.classList.toggle('drop-in-thumbs', at !== null);
+        return;
+      }
+      zone.hidden = true; document.body.classList.remove('drop-in-thumbs'); this.sidebar.clearDropMarks();
+      if (ev.type !== 'drop' || !ev.paths.length) return;
+      const isPdf = (p: string) => /\.pdf$/i.test(p), isImg = (p: string) => /\.(png|jpe?g|webp|gif|bmp)$/i.test(p);
+      const at = canInsert ? this.sidebar.dropIndexAt(ev.x, ev.y) : null;
+      const read = async (ps: string[]) => (await Promise.all(ps.map(p => this.platform.readPath(p).catch(() => null)))).filter(Boolean) as OpenedFile[];
+      const asFile = (f: OpenedFile) => new File([f.bytes as BlobPart], f.name, { type: isPdf(f.name) ? 'application/pdf' : 'image/' + (f.name.split('.').pop()!.toLowerCase().replace('jpg', 'jpeg')) });
+      const pdfs = ev.paths.filter(isPdf), imgs = ev.paths.filter(isImg);
+      if (!pdfs.length && !imgs.length) { toast('PDF나 이미지 파일만 열 수 있습니다.'); return; }
+      if (at !== null) { this.sidebar.onDropFiles((await read([...pdfs, ...imgs])).map(asFile), at); return; }
+      if (pdfs.length) await this.openFiles(await read(pdfs));
+      else if (this.mode === 'edit' && this.doc) this.editor?.dropImages((await read(imgs)).map(asFile));
+      else import('./tools.ts').then(async m => m.imagesToPdf(this, (await read(imgs)).map(asFile)));
+    });
     window.addEventListener('drop', async e => {
       if (!isFiles(e)) return;
       e.preventDefault(); depth = 0; zone.hidden = true; document.body.classList.remove('drop-in-thumbs');

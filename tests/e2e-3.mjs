@@ -39,7 +39,7 @@ ok(await ev(() => window.__app.doc.info.pageCount) === 12, 'Ctrl+Z로 되살리�
 
 console.log('단축키');
 await page.keyboard.press('F1');
-await page.waitForSelector('.modal .keys-table');
+await page.waitForSelector('.modal .keys-wrap');
 ok(await page.locator('.modal .key-chip').count() > 30, '단축키 창 (' + await page.locator('.modal .key-chip').count() + '개)');
 await page.keyboard.press('Escape'); await page.waitForTimeout(300);
 await page.mouse.click(700, 400);
@@ -64,7 +64,8 @@ await page.keyboard.press('Enter');
 await page.waitForTimeout(900);
 ok(await ev(() => window.__app.editor.sel?.kind) === 'run', '넣은 글자가 골라져 있음');
 const red = '#d0342c';
-await page.locator('.rb-props .sw[aria-label="색 #d0342c"]').first().click();
+await page.locator('.rb-props .color-btn').first().click();
+await page.locator('.color-pop .sw[aria-label="색 #d0342c"]').first().click();
 await page.waitForTimeout(700);
 let r = (await runs()).find(x => x.text.includes('나중에 꾸밀'));
 ok(r && r.color.toLowerCase() === red, '넣은 뒤 색 바꾸기: ' + r?.color);
@@ -95,7 +96,8 @@ ok(tb && tb.meta.text.startsWith('글상자') && tb.rect.w > 170 && tb.rect.h > 
 await page.mouse.click(...at(tb.rect.x + 10, tb.rect.y + 10));
 await page.waitForTimeout(400);
 ok(await ev(() => window.__app.editor.sel?.obj?.type) === 'textbox', '글상자 고르기');
-await page.locator('.rb-props .sw[aria-label="색 #2b59c3"]').nth(1).click();
+await page.locator('.rb-props .color-btn').nth(1).click();
+await page.locator('.color-pop .sw[aria-label="색 #2b59c3"]').first().click();
 await page.waitForTimeout(900);
 tb = (await objs()).find(o => o.type === 'textbox');
 ok(tb?.meta.border === '#2b59c3', '글상자 테두리 색 바꾸기');

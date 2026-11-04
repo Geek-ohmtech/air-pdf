@@ -8,8 +8,29 @@
   <title>Air PDF</title>
   <link rel="icon" href="./icon-64.png" type="image/png">
   <link rel="apple-touch-icon" href="./icon.png">
+  <script src="./boot.js"></script>
+  <style>
+    /* 시작 화면: 앱 코드와 엔진을 불러오는 동안 보인다 */
+    #splash { position: fixed; inset: 0; z-index: 100; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 18px; background: #e7e9ee; transition: opacity .18s; font: 13px "Segoe UI", "Malgun Gothic", "Apple SD Gothic Neo", sans-serif; color: #5f6878; }
+    #splash img { height: 56px; }
+    #splash .dk { display: none; }
+    #splash .bar { width: 200px; height: 4px; border-radius: 2px; background: rgba(31, 63, 168, .15); overflow: hidden; }
+    #splash .bar i { display: block; width: 40%; height: 100%; border-radius: 2px; background: #1f3fa8; animation: sp 1.1s ease-in-out infinite; }
+    #splash.out { opacity: 0; pointer-events: none; }
+    @keyframes sp { 0% { transform: translateX(-100%); } 100% { transform: translateX(250%); } }
+    :root[data-theme="dark"] #splash { background: #15171c; color: #9aa2b2; }
+    :root[data-theme="dark"] #splash .lt { display: none; } :root[data-theme="dark"] #splash .dk { display: inline; }
+    :root[data-theme="dark"] #splash .bar i { background: #8ea6ff; }
+    @media (prefers-color-scheme: dark) {
+      :root:not([data-theme="light"]) #splash { background: #15171c; color: #9aa2b2; }
+      :root:not([data-theme="light"]) #splash .lt { display: none; } :root:not([data-theme="light"]) #splash .dk { display: inline; }
+      :root:not([data-theme="light"]) #splash .bar i { background: #8ea6ff; }
+    }
+    @media (prefers-reduced-motion: reduce) { #splash .bar i { animation-duration: 3s; } }
+  </style>
 </head>
 <body>
+  <div id="splash" role="status" aria-live="polite"><img class="lt" src="./logo.png" alt="Air PDF"><img class="dk" src="./logo-dark.png" alt="Air PDF"><div class="bar"><i></i></div><span class="msg">불러오는 중…</span></div>
   <noscript>Air PDF는 자바스크립트가 필요합니다.</noscript>
   <script type="module" src="/src/main.ts"></script>
 </body>

@@ -6,6 +6,7 @@ import type { App } from '../app.ts';
 import type { AnnotInfo, PageObjInfo, Rect, TextRun } from '../engine/types.ts';
 import type { PageEl } from '../viewer/docview.ts';
 import { busy, confirmBox, dialog, h, icon, menu, promptBox, toast, type IconName } from '../ui/dom.ts';
+import { colorButton } from '../ui/color.ts';
 import { builtinItems, ensureFont, fontCss, fontItem, loadSystemFonts, systemFontsLoaded } from './fontlist.ts';
 
 type Tab = 'edit' | 'annot' | 'page' | 'tools';
@@ -16,7 +17,6 @@ interface Entry { label: string; keys: number[]; undo: () => Promise<boolean | v
 type Sel = { kind: 'run'; page: number; key: number; run: TextRun } | { kind: 'obj'; page: number; key: number; obj: PageObjInfo } | { kind: 'annot'; page: number; key: number; annot: AnnotInfo };
 
 const ANNOT = { TEXT: 1, SQUARE: 5, CIRCLE: 6, HIGHLIGHT: 9, UNDERLINE: 10, STRIKEOUT: 12, INK: 15 };
-const SWATCH = ['#1a1a1a', '#d0342c', '#2b59c3', '#1f8a4c', '#e07b00', '#7b3fbf', '#ffd400', '#7ee081', '#ff8fb8', '#79c7ff'];
 const TOOLS: Record<Tool, { tab: Tab; label: string; icon: IconName; key?: string; hint: string }> = {
   select: { tab: 'edit', label: '선택', icon: 'select', key: 'v', hint: '글자 줄·그림·도형을 눌러 고르고 끌어서 옮깁니다. 두 번 누르면 글자를 고칩니다. Delete로 지웁니다.' },
   editText: { tab: 'edit', label: '글자 고치기', icon: 'editText', key: 'e', hint: '원본 글자 줄을 누르면 바로 고칠 수 있습니다. Enter로 확정, Shift+Enter 줄바꿈, Esc 취소.' },
@@ -45,6 +45,8 @@ const inRect = (r: Rect, x: number, y: number, pad = 0) => x >= r.x - pad && x <
 const SERIF = /myeongjo|myungjo|batang|times|serif|mincho|song|gungsuh|명조|바탕|궁서|garamond|georgia|cambria/i;
 
 const SHAPE_TOOLS = new Set(['textbox', 'rect', 'ellipse', 'line', 'free']);
+/** 하나 넣으면 선택 도구로 돌아가는 도구 */
+const CREATE_TOOLS = new Set(['addText', 'textbox', 'table', 'rect', 'ellipse', 'line', 'free']);
 export class Editor {
   app: App;
   tab: Tab = 'edit'; tool: Tool = 'select';
@@ -55,6 +57,10 @@ export class Editor {
   private objs = new Map<number, PageObjInfo[] | Promise<PageObjInfo[]>>();
   private annots = new Map<number, AnnotInfo[] | Promise<AnnotInfo[]>>();
   private sel: Sel | null = null;
+  /** Shift+클릭·끌어 고르기로 함께 고른 것 (같은 쪽, sel 제외) */
+  private more: Sel[] = [];
+  /** 도구 단추를 두 번 누르면 그 도구를 계속 쓴다 (아니면 하나 넣고 선택 도구로 돌아감) */
+  private toolLock = false;
   private hover: { page: number; rect: Rect } | null = null;
   private drag: any = null;
   private editing: { ta: HTMLTextAreaElement; commit: (cancel?: boolean) => Promise<void>; kind?: 'run' | 'new' | 'box'; restyle?: () => void } | null = null;
@@ -117,7 +123,7 @@ export class Editor {
   }
   /** 입력란 채우기를 허용하는 도구인가 */
   allowsForms() { return this.tool === 'select' || this.tool === 'aselect'; }
-  hint() { return this.sel ? '선택됨 · 끌어서 옮기기 · 화살표로 1pt씩 · Delete로 지우기 · Esc 선택 해제' : TOOLS[this.tool]?.hint || ''; }
+  hint() { return this.more.length ? `${this.more.length + 1}개 고름 · 끌어서 함께 옮기기 · Shift+클릭으로 더하거나 빼기 · Delete로 지우기 · Esc 해제` : this.sel ? '선택됨 · 끌어서 옮기기 · Shift+클릭으로 여러 개 고르기 · 화살표로 1pt씩 · Delete로 지우기 · Esc 선택 해제' : TOOLS[this.tool]?.hint || ''; }
 
   /* ───────────── 리본 ───────────── */
   private buildRibbon() {
@@ -134,7 +140,10 @@ export class Editor {
   }
   private toolBtn(t: Tool) {
     const d = TOOLS[t];
-    return h('button', { class: 'rt', type: 'button', dataset: { tool: t }, 'aria-pressed': String(this.tool === t), title: d.label + (this.app.shortcuts.label('tool.' + t) ? ` (${this.app.shortcuts.label('tool.' + t)})` : ''), onclick: () => this.setTool(t) }, icon(d.icon), h('span', {}, d.label));
+    const keep = CREATE_TOOLS.has(t) ? ' · 두 번 누르면 계속 쓰기' : '';
+    const b = h('button', { class: 'rt' + (this.tool === t && this.toolLock ? ' locked' : ''), type: 'button', dataset: { tool: t }, 'aria-pressed': String(this.tool === t), title: d.label + (this.app.shortcuts.label('tool.' + t) ? ` (${this.app.shortcuts.label('tool.' + t)})` : '') + keep, onclick: () => this.setTool(t) }, icon(d.icon), h('span', {}, d.label));
+    if (keep) b.addEventListener('dblclick', () => { this.setTool(t, true); toast(`“${d.label}” 도구를 계속 씁니다. 그만 쓰려면 Esc나 다른 도구를 누르세요.`); });
+    return b;
   }
   private actBtn(ic: IconName, label: string, fn: (e: MouseEvent) => void, title?: string) {
     return h('button', { class: 'rt', type: 'button', title: title || label, onclick: fn }, icon(ic), h('span', {}, label));
@@ -168,13 +177,14 @@ export class Editor {
     }
     this.renderProps();
   }
-  setTool(t: Tool) {
+  setTool(t: Tool, lock = false) {
     if (t === 'image') { this.pickImage(); return; }
     if (t === 'sign') { this.signature(); return; }
     this.commitPending();
+    this.toolLock = lock;
     if (TOOLS[t].tab !== this.tab && (this.tab === 'edit' || this.tab === 'annot')) { this.tool = t; this.setTab(TOOLS[t].tab); return; }
-    this.tool = t; this.sel = null; this.hover = null;
-    this.toolBar.querySelectorAll('.rt[data-tool]').forEach(b => b.setAttribute('aria-pressed', String((b as HTMLElement).dataset.tool === t)));
+    this.tool = t; this.sel = null; this.more = []; this.hover = null;
+    this.toolBar.querySelectorAll('.rt[data-tool]').forEach(b => { const on = (b as HTMLElement).dataset.tool === t; b.setAttribute('aria-pressed', String(on)); b.classList.toggle('locked', on && lock); });
     const cur: Record<string, string> = { select: 'default', aselect: 'default', editText: 'text', addText: 'text', textbox: 'crosshair', note: 'copy', pen: 'crosshair', free: 'crosshair', highlight: 'text', underline: 'text', strike: 'text' };
     this.V.interaction!.cursor = cur[t] || 'crosshair';
     this.V.el.style.cursor = this.V.interaction!.cursor;
@@ -185,10 +195,7 @@ export class Editor {
     const P = this.propBar; P.innerHTML = '';
     const t = this.tool, s = this.sel;
     const obj = s?.kind === 'obj' ? s.obj : null;
-    const swatches = (cur: string, set: (c: string) => void, allowNone = false) => h('div', { class: 'swatches' },
-      ...(allowNone ? [h('button', { class: 'sw none', type: 'button', title: '없음', 'aria-label': '없음', 'aria-pressed': String(!cur), onclick: () => set('') })] : []),
-      ...SWATCH.map(c => h('button', { class: 'sw', type: 'button', style: { background: c }, 'aria-label': '색 ' + c, 'aria-pressed': String(c === cur), onclick: () => set(c) })),
-      (() => { const i = h('input', { type: 'color', class: 'sw-pick', value: cur || '#000000', title: '다른 색' }); i.addEventListener('change', () => set(i.value)); return i; })());
+    const color = (title: string, cur: string, set: (c: string) => void, mark: 'text' | 'line' | 'fill' = 'line', none?: string) => colorButton({ title, value: cur, onPick: set, mark, none });
     const num = (label: string, v: number, min: number, max: number, step: number, set: (n: number) => void, unit = 'pt') => {
       const i = h('input', { type: 'number', class: 'num', value: String(Math.round(v * 10) / 10), min: String(min), max: String(max), step: String(step), 'aria-label': label });
       i.addEventListener('change', () => { const n = Math.max(min, Math.min(max, parseFloat(i.value) || v)); set(n); });
@@ -196,37 +203,45 @@ export class Editor {
     };
     const boldBtn = (on: boolean, set: (b: boolean) => void) => h('button', { class: 'tg' + (on ? ' on' : ''), type: 'button', 'aria-pressed': String(on), title: '굵게', onclick: () => set(!on) }, h('b', {}, '가'));
     const lbl = (txt: string) => h('span', { class: 'prop-lbl' }, txt);
+    if (s && this.more.length) { // 여러 개
+      const all = this.allSel();
+      P.append(lbl(`${all.length}개 고름`));
+      if (all.every(x => x.kind === 'run')) P.append(color('글자 색', '', c => this.styleMany({ color: c }), 'text'), boldBtn(false, () => this.styleMany({ bold: true })));
+      else if (all.every(x => x.kind === 'obj' && ['shape', 'free', 'path'].includes(x.obj.type))) P.append(color('선 색', '', c => this.setShape({ stroke: c })), num('굵기', this.props.width, 0.25, 30, 0.25, n => this.setShape({ width: n })));
+      P.append(h('button', { class: 'btn sm danger-ghost', type: 'button', onclick: () => this.deleteSel() }, icon('trash'), '모두 지우기'));
+      return;
+    }
     // 글자 (새 글자, 고른 글자 줄, 표)
     const run = s?.kind === 'run' ? s.run : null;
     if (run || t === 'addText' || t === 'editText') {
       const cur = run ? { color: run.color, size: run.size, bold: run.bold, font: '' } : { color: this.props.textColor, size: this.props.fontSize, bold: this.props.bold, font: this.props.font };
       if (run) P.append(lbl('고른 글자'));
       P.append(this.fontSelect(cur.font || this.props.font, f => this.setText('font', f), run ? run.font : ''),
-        swatches(cur.color, c => this.setText('color', c)),
+        color('글자 색', cur.color, c => this.setText('color', c), 'text'),
         num('크기', cur.size, 4, 200, 0.5, n => this.setText('size', n)),
         boldBtn(cur.bold, b => this.setText('bold', b)));
     } else if (obj?.type === 'textbox' || t === 'textbox') {
       const m = obj?.type === 'textbox' ? obj.meta : { font: this.props.font, color: this.props.textColor, size: this.props.fontSize, bold: this.props.bold, align: this.props.align, border: this.props.border, fill: this.props.tbFill, bw: this.props.width };
       if (obj) P.append(lbl('글상자'));
       const alignBtn = (a: 'left' | 'center' | 'right', ic: string) => h('button', { class: 'tg' + (m.align === a ? ' on' : ''), type: 'button', title: { left: '왼쪽 정렬', center: '가운데 정렬', right: '오른쪽 정렬' }[a], 'aria-pressed': String(m.align === a), onclick: () => this.setBox({ align: a }) }, ic);
-      P.append(this.fontSelect(m.font || 'noto-sans', f => this.setBox({ font: f })), swatches(m.color, c => this.setBox({ color: c })), num('크기', m.size, 4, 120, 0.5, n => this.setBox({ size: n })), boldBtn(!!m.bold, b => this.setBox({ bold: b })),
+      P.append(this.fontSelect(m.font || 'noto-sans', f => this.setBox({ font: f })), color('글자 색', m.color, c => this.setBox({ color: c }), 'text'), num('크기', m.size, 4, 120, 0.5, n => this.setBox({ size: n })), boldBtn(!!m.bold, b => this.setBox({ bold: b })),
         h('div', { class: 'seg' }, alignBtn('left', '≡'), alignBtn('center', '☰'), alignBtn('right', '≡')),
-        lbl('테두리'), swatches(m.border || '', c => this.setBox({ border: c }), true), lbl('배경'), swatches(m.fill || '', c => this.setBox({ fill: c }), true));
+        color('테두리 색', m.border || '', c => this.setBox({ border: c }), 'line', '테두리 없음'), color('배경색', m.fill || '', c => this.setBox({ fill: c }), 'fill', '배경 없음'));
     } else if (obj && (obj.type === 'shape' || obj.type === 'free' || obj.type === 'path')) {
       const st = obj.meta || {};
-      P.append(lbl(obj.type === 'free' ? '자유선' : '도형'), lbl('선'), swatches(st.stroke || '', c => this.setShape({ stroke: c }), obj.type === 'shape' && st.kind !== 'line'),
+      P.append(lbl(obj.type === 'free' ? '자유선' : '도형'), color('선 색', st.stroke || '', c => this.setShape({ stroke: c }), 'line', obj.type === 'shape' && st.kind !== 'line' ? '선 없음' : undefined),
         num('굵기', st.width ?? this.props.width, 0.25, 30, 0.25, n => this.setShape({ width: n })));
-      if (obj.type !== 'free' && st.kind !== 'line') P.append(lbl('채우기'), swatches(st.fill || '', c => this.setShape({ fill: c }), true));
+      if (obj.type !== 'free' && st.kind !== 'line') P.append(color('채우기 색', st.fill || '', c => this.setShape({ fill: c }), 'fill', '채우기 없음'));
     } else if (t === 'rect' || t === 'ellipse' || t === 'line' || t === 'free' || t === 'table') {
-      P.append(swatches(this.props.stroke, c => { this.props.stroke = c; this.renderProps(); }), num('굵기', this.props.width, 0.25, 20, 0.25, n => this.props.width = n));
-      if (t === 'rect' || t === 'ellipse') P.append(lbl('채우기'), swatches(this.props.fill === 'same' ? this.props.stroke : this.props.fill, c => { this.props.fill = c; this.renderProps(); }, true));
+      P.append(color('선 색', this.props.stroke, c => { this.props.stroke = c; this.renderProps(); }), num('굵기', this.props.width, 0.25, 20, 0.25, n => this.props.width = n));
+      if (t === 'rect' || t === 'ellipse') P.append(color('채우기 색', this.props.fill === 'same' ? this.props.stroke : this.props.fill, c => { this.props.fill = c; this.renderProps(); }, 'fill', '채우기 없음'));
       if (t === 'table') P.append(this.fontSelect(this.props.font, f => { this.props.font = f; this.renderProps(); }), num('글자', this.props.fontSize, 5, 48, 0.5, n => this.props.fontSize = n));
     } else if (t === 'highlight' || t === 'underline' || t === 'strike') {
       const cur = t === 'highlight' ? this.props.hl : this.props.annotColor;
-      P.append(swatches(cur, c => { if (t === 'highlight') this.props.hl = c; else this.props.annotColor = c; this.renderProps(); }));
+      P.append(color(t === 'highlight' ? '형광펜 색' : '선 색', cur, c => { if (t === 'highlight') this.props.hl = c; else this.props.annotColor = c; this.renderProps(); }, t === 'highlight' ? 'fill' : 'line'));
       if (t === 'highlight') P.append(num('불투명도', Math.round(this.props.opacity * 100), 10, 100, 5, n => this.props.opacity = n / 100, '%'));
     } else if (t === 'pen' || t === 'arect' || t === 'aellipse' || t === 'note') {
-      P.append(swatches(this.props.annotColor, c => { this.props.annotColor = c; this.renderProps(); }));
+      P.append(color('색', this.props.annotColor, c => { this.props.annotColor = c; this.renderProps(); }));
       if (t !== 'note') P.append(num('굵기', this.props.width, 0.5, 20, 0.5, n => this.props.width = n));
     } else if (t === 'redact') {
       const what = h('select', { class: 'sel', 'aria-label': '지울 대상' }, h('option', { value: 'all', selected: this.props.redactWhat === 'all' ? '' : undefined }, '지울 대상: 전부 (글자·그림·선)'), h('option', { value: 'text', selected: this.props.redactWhat === 'text' ? '' : undefined }, '지울 대상: 글자만'));
@@ -307,6 +322,11 @@ export class Editor {
       }
     } catch (e: any) { toast('바꾸지 못했습니다: ' + e.message); }
   }
+  /** 하나 넣은 뒤: 선택 도구로 돌아가 방금 넣은 것을 골라 둔다 (도구를 고정했으면 그대로) */
+  private async afterCreate(page: number, h0: number | undefined, kind: 'obj' | 'run' = 'obj') {
+    if (!this.toolLock && this.tool !== 'select' && TOOLS[this.tool].tab === 'edit') this.setTool('select');
+    if (kind === 'run') await this.reselectRun(page, h0); else await this.reselectObj(page, h0);
+  }
   private async reselectRun(page: number, h0?: number) {
     if (!h0) return;
     const runs = await this.getRuns(page);
@@ -319,10 +339,23 @@ export class Editor {
     const o = objs.find(x => (x.objs || [x.h]).includes(h0));
     if (o) { this.sel = { kind: 'obj', page, key: this.V.pages[page].key, obj: o }; this.paintPage(page); this.renderProps(); this.app.updateStatus(); }
   }
+  /** 여러 글자 줄의 색·굵기를 한 번에 */
+  private async styleMany(st: { color?: string; bold?: boolean }) {
+    const s = this.sel; if (!s) return;
+    const id = this.doc.id, key = s.key, objs = this.selObjs(), keep = this.allSel();
+    try {
+      const res = await this.E.call<{ before: any[] }>('setTextStyle', [id, key, objs, st]);
+      this.push({ label: st.color ? '글자 색' : '굵게', keys: [key], undo: () => this.E.call('restoreTextStyle', [id, key, res.before]), redo: () => this.E.call('setTextStyle', [id, key, objs, st]) });
+      this.changed(key);
+      const runs = await this.getRuns(s.page);
+      const all = keep.map(k => k.kind === 'run' ? runs.find(r => r.objs.includes(k.run.objs[0])) : null).filter(Boolean).map(run => ({ kind: 'run', page: s.page, key, run }) as Sel);
+      this.sel = all[0] || null; this.more = all.slice(1); this.paintPage(s.page); this.renderProps();
+    } catch (e: any) { toast('바꾸지 못했습니다: ' + e.message); }
+  }
   /** 도형·자유선 선 색·굵기·채우기 */
   private async setShape(st: { stroke?: string; width?: number; fill?: string }) {
     const s = this.sel; if (s?.kind !== 'obj') return;
-    const id = this.doc.id, key = s.key, objs = s.obj.objs || [s.obj.h];
+    const id = this.doc.id, key = s.key, objs = this.more.length ? this.selObjs() : s.obj.objs || [s.obj.h];
     const before = await this.E.call<any[]>('setShapeStyle', [id, key, objs, st]);
     this.push({ label: '도형 모양', keys: [key], undo: () => this.E.call('restoreShapeStyle', [id, key, before]), redo: () => this.E.call('setShapeStyle', [id, key, objs, st]) });
     if (st.stroke !== undefined) this.props.stroke = st.stroke || this.props.stroke;
@@ -419,14 +452,17 @@ export class Editor {
       if (tool === 'select' && !this.now(this.objs, pe.index)) this.getObjs(pe.index);
     }
     if (tool === 'aselect' && !this.now(this.annots, pe.index)) this.getAnnots(pe.index).then(() => this.V.pageEl(pe.index) && this.paint(this.V.pageEl(pe.index)!));
-    if (this.hover && this.hover.page === pe.index && (!this.sel || this.sel.page !== pe.index || !this.sameRect(this.selRect()!, this.hover.rect))) {
+    if (this.editing) { if (this.drag?.page === pe.index && this.drag.preview) svg.append(this.drag.preview); return; }
+    if (this.hover && this.hover.page === pe.index && !this.allSel().some(x => x.page === pe.index && this.sameRect(this.rectOf(x), this.hover!.rect))) {
       const r = this.hover.rect; svg.append(svgEl('rect', { class: 'hover-box', x: r.x - 1.5, y: r.y - 1.5, width: r.w + 3, height: r.h + 3 }));
     }
-    if (this.sel && this.sel.page === pe.index) {
-      let r = this.selRect()!;
+    for (const x of this.allSel()) {
+      if (x.page !== pe.index) continue;
+      let r = this.rectOf(x);
       if (this.drag?.kind === 'move' && this.drag.moved) r = { ...r, x: r.x + this.drag.dx, y: r.y + this.drag.dy };
-      if (this.drag?.kind === 'resize') r = this.drag.r;
+      if (this.drag?.kind === 'resize' && x === this.sel) r = this.drag.r;
       svg.append(svgEl('rect', { class: 'sel-box', x: r.x - 2, y: r.y - 2, width: r.w + 4, height: r.h + 4 }));
+      if (x !== this.sel || this.more.length) continue;
       const hs = 7 / this.V.zoom;
       for (const [name, hx, hy] of this.handles(r)) svg.append(svgEl('rect', { class: 'handle h-' + name, x: hx - hs / 2, y: hy - hs / 2, width: hs, height: hs }));
     }
@@ -440,7 +476,7 @@ export class Editor {
     return [['nw', L, T], ['n', cx, T], ['ne', R, T], ['e', R, cy], ['se', R, B], ['s', cx, B], ['sw', L, B], ['w', L, cy]];
   }
   private handleAt(x: number, y: number): string | null {
-    const r = this.selRect(); if (!r) return null;
+    const r = this.selRect(); if (!r || this.more.length) return null;
     const hs = 8 / this.V.zoom;
     for (const [n, hx, hy] of this.handles(r)) if (Math.abs(x - hx) <= hs && Math.abs(y - hy) <= hs) return n;
     return null;
@@ -451,6 +487,27 @@ export class Editor {
     return s.kind === 'run' ? s.run.rect : s.kind === 'obj' ? s.obj.rect : s.annot.rect;
   }
   private paintPage(i: number) { const pe = this.V.pageEl(i); if (pe) this.paint(pe); }
+  /** 입력 칸을 열 때: 고른 표시·마우스 올림 표시를 지워 겹쳐 보이지 않게 */
+  private clearSelFor(page: number) {
+    const old = this.sel?.page; this.sel = null; this.more = []; this.hover = null;
+    if (old !== undefined && old !== page) this.paintPage(old);
+    this.paintPage(page);
+  }
+  private allSel(): Sel[] { return this.sel ? [this.sel, ...this.more] : []; }
+  private rectOf(x: Sel): Rect { return x.kind === 'run' ? x.run.rect : x.kind === 'obj' ? x.obj.rect : x.annot.rect; }
+  private sameSel(a: Sel, b: Sel) {
+    if (a.kind !== b.kind || a.page !== b.page) return false;
+    if (a.kind === 'run') return (b as any).run.objs[0] === a.run.objs[0];
+    if (a.kind === 'obj') return ((b as any).obj.objs || [(b as any).obj.h])[0] === (a.obj.objs || [a.obj.h])[0];
+    return (b as any).annot.id === a.annot.id;
+  }
+  /** Shift+클릭: 넣거나 빼기 */
+  private toggleSel(x: Sel) {
+    const all = this.allSel().filter(s => s.kind !== 'annot' && s.page === x.page);
+    const i = all.findIndex(s => this.sameSel(s, x));
+    if (i >= 0) all.splice(i, 1); else all.push(x);
+    this.sel = all[0] || null; this.more = all.slice(1);
+  }
 
   /* ───────────── 마우스 ───────────── */
   private hitRun(page: number, x: number, y: number) { const runs = this.now(this.runs, page); return runs?.filter(r => !r.invisible).reverse().find(r => inRect(r.rect, x, y, 1.5)) || null; }
@@ -491,16 +548,24 @@ export class Editor {
         const hn = this.handleAt(x, y);
         if (hn) { const r0 = { ...s.obj.rect }; this.drag = { kind: 'resize', page, x0: x, y0: y, handle: hn, r0, r: r0 }; return true; }
       }
-      if (s && s.page === page && inRect(this.selRect()!, x, y, 2)) { this.drag = { kind: 'move', page, x0: x, y0: y, dx: 0, dy: 0, moved: false }; return true; }
+      const inSel = this.allSel().some(q => q.page === page && inRect(this.rectOf(q), x, y, 2));
+      if (inSel && !e.shiftKey) { this.drag = { kind: 'move', page, x0: x, y0: y, dx: 0, dy: 0, moved: false }; return true; }
       const run = this.hitRun(page, x, y);
       const obj = run ? null : this.hitObj(page, x, y);
       if (!this.now(this.runs, page)) { this.getRuns(page); this.getObjs(page); }
       const old = this.sel?.page;
-      this.sel = run ? { kind: 'run', page, key, run } : obj ? { kind: 'obj', page, key, obj } : null;
+      const hit: Sel | null = run ? { kind: 'run', page, key, run } : obj ? { kind: 'obj', page, key, obj } : null;
+      if (e.shiftKey && hit && (!this.sel || this.sel.page === page)) this.toggleSel(hit);
+      else if (!e.shiftKey || !hit) { if (hit || !e.shiftKey) { this.sel = hit; this.more = []; } }
       if (old !== undefined && old !== page) this.paintPage(old);
       this.paintPage(page); this.renderProps(); this.app.updateStatus();
-      if (this.sel) { this.drag = { kind: 'move', page, x0: x, y0: y, dx: 0, dy: 0, moved: false }; return true; }
-      return false;
+      if (hit && !e.shiftKey) { this.drag = { kind: 'move', page, x0: x, y0: y, dx: 0, dy: 0, moved: false }; return true; }
+      if (!hit) { // 빈 곳에서 끌면 범위 안의 것을 모두 고른다
+        const preview = svgEl('rect', { class: 'marquee', x, y, width: 0, height: 0 });
+        this.drag = { kind: 'marquee', page, x0: x, y0: y, x, y, preview, add: e.shiftKey };
+        return true;
+      }
+      return true;
     }
     // 도형·글상자 도구에서도 방금 넣은(고른) 것은 바로 크기 조절·옮기기
     if (SHAPE_TOOLS.has(t)) {
@@ -596,6 +661,11 @@ export class Editor {
       const last = d.pts[d.pts.length - 1];
       if (Math.hypot(x - last[0], y - last[1]) * this.V.zoom < 1.5) return;
       d.pts.push([x, y]); d.preview.setAttribute('points', d.pts.map((p: number[]) => p.join(',')).join(' '));
+    } else if (d.kind === 'marquee' && page === d.page) {
+      d.x = x; d.y = y;
+      d.preview.setAttribute('x', Math.min(d.x0, x)); d.preview.setAttribute('y', Math.min(d.y0, y));
+      d.preview.setAttribute('width', Math.abs(x - d.x0)); d.preview.setAttribute('height', Math.abs(y - d.y0));
+      this.paintPage(d.page);
     } else if (d.kind === 'area' && page === d.page) {
       d.x = x; d.y = y;
       const p = d.preview, x0 = Math.min(d.x0, x), y0 = Math.min(d.y0, y), w = Math.abs(x - d.x0), hh = Math.abs(y - d.y0);
@@ -611,9 +681,10 @@ export class Editor {
       if (d.kind === 'move' && d.moved && this.sel) await this.moveSel(d.dx, d.dy);
       else if (d.kind === 'resize' && this.sel?.kind === 'obj' && !this.sameRect(d.r, d.r0)) await this.resizeSel(d.r0, d.r, d.handle);
       else if (d.kind === 'textsel') await this.markupFromSelection();
+      else if (d.kind === 'marquee') await this.marqueeDone(d);
       else if (d.kind === 'ink' && d.free) {
         const ch = await this.E.call<ObjChange>('addFree', [this.doc.id, key, { points: d.pts, stroke: this.props.stroke, width: this.props.width }]);
-        this.objEntry('자유선', ch); await this.reselectObj(d.page, ch.added[0]?.h);
+        this.objEntry('자유선', ch); await this.afterCreate(d.page, ch.added[0]?.h);
       } else if (d.kind === 'ink' && d.pts.length > 1) {
         const id = await this.E.call<number>('addAnnot', [this.doc.id, key, { subtype: ANNOT.INK, ink: [d.pts], color: this.props.annotColor, width: this.props.width }]);
         this.annotEntry('펜', key, id);
@@ -625,6 +696,20 @@ export class Editor {
       }
     } catch (err: any) { toast('하지 못했습니다: ' + err.message); }
     this.paintPage(d.page);
+  }
+  private async marqueeDone(d: any) {
+    const r = { x: Math.min(d.x0, d.x), y: Math.min(d.y0, d.y), w: Math.abs(d.x - d.x0), h: Math.abs(d.y - d.y0) };
+    if (r.w * this.V.zoom < 4 && r.h * this.V.zoom < 4) return;
+    const page = d.page, key = this.V.pages[page].key;
+    const [runs, objs] = await Promise.all([this.getRuns(page), this.getObjs(page)]);
+    const inside = (q: Rect) => q.x >= r.x && q.y >= r.y && q.x + q.w <= r.x + r.w && q.y + q.h <= r.y + r.h;
+    const got: Sel[] = [
+      ...runs.filter(x => !x.invisible && inside(x.rect)).map(run => ({ kind: 'run', page, key, run }) as Sel),
+      ...objs.filter(o => inside(o.rect)).map(obj => ({ kind: 'obj', page, key, obj }) as Sel)];
+    const all = d.add && this.sel?.page === page ? [...this.allSel()] : [];
+    for (const g of got) if (!all.some(a => this.sameSel(a, g))) all.push(g);
+    this.sel = all[0] || null; this.more = all.slice(1);
+    this.renderProps(); this.app.updateStatus();
   }
   private dbl(_e: MouseEvent, page: number, x: number, y: number) {
     if (this.tool === 'select' || this.tool === 'editText' || this.tool === 'textbox') {
@@ -687,13 +772,15 @@ export class Editor {
   private placeEditor(page: number, r: Rect, size: number, opts: { font: string; color: string; bold: boolean; text: string; minW?: number }) {
     const pe = this.V.pageEl(page); if (!pe) return null;
     const z = this.V.zoom, p = this.V.pages[page];
-    const ta = h('textarea', { class: 'ed-text', spellcheck: 'false', 'aria-label': '글자 입력', wrap: 'off' }) as HTMLTextAreaElement;
+    const ta = h('textarea', { class: 'ed-text', spellcheck: 'false', 'aria-label': '글자 입력', wrap: 'off', cols: '1', rows: '1' }) as HTMLTextAreaElement;
     ta.value = opts.text;
+    this.clearSelFor(page);
     Object.assign(ta.style, { left: r.x / p.w * 100 + '%', top: r.y / p.h * 100 + '%', fontSize: size * z + 'px', fontFamily: opts.font, color: opts.color, fontWeight: opts.bold ? '700' : '400', minWidth: (opts.minW || 40) * z + 'px', minHeight: size * 1.35 * z + 'px' });
     const fit = () => { ta.style.height = 'auto'; ta.style.width = 'auto'; ta.style.height = ta.scrollHeight + 'px'; ta.style.width = Math.max(ta.scrollWidth + size * z, (opts.minW || 0) * z) + 'px'; };
     ta.addEventListener('input', fit);
     pe.edit.append(ta); fit();
-    requestAnimationFrame(() => { ta.focus(); ta.select(); });
+    ta.focus(); ta.select();
+    requestAnimationFrame(() => { if (document.activeElement !== ta) { ta.focus(); ta.select(); } });
     return ta;
   }
   private openRunEditor(page: number, run: TextRun) {
@@ -735,7 +822,7 @@ export class Editor {
         await ensureFont(this.app, this.props.font);
         const ch = await this.E.call<ObjChange>('addText', [this.doc.id, key, { x: x + 2, y: y + 1, text, size: this.props.fontSize, color: this.props.textColor, bold: this.props.bold, font: this.props.font }]);
         this.objEntry('글자 추가', ch);
-        await this.reselectRun(page, ch.added[0]?.h); // 넣은 글자를 골라 둔다 → 바로 색·크기·글꼴을 바꿀 수 있다
+        await this.afterCreate(page, ch.added[0]?.h, 'run'); // 넣은 글자를 골라 둔다 → 바로 색·크기·글꼴을 바꿀 수 있다
         this.app.status.querySelector('.st-hint')!.textContent = '넣은 글자가 골라져 있습니다 · 위에서 색·크기·글꼴을 바로 바꿀 수 있습니다';
       } catch (e: any) { toast('글자를 넣지 못했습니다: ' + e.message); }
     };
@@ -750,6 +837,7 @@ export class Editor {
     const m = existing?.meta;
     if (m) Object.assign(this.props, { font: m.font || 'noto-sans', textColor: m.color, fontSize: m.size, bold: !!m.bold, align: m.align || 'left', border: m.border || '', tbFill: m.fill || '' });
     const ta = h('textarea', { class: 'ed-text box', spellcheck: 'false', 'aria-label': '글상자 내용' }) as HTMLTextAreaElement;
+    this.clearSelFor(page);
     ta.value = m?.text || '';
     const restyle = () => Object.assign(ta.style, {
       left: r.x / p.w * 100 + '%', top: r.y / p.h * 100 + '%', width: r.w * z + 'px', minHeight: r.h * z + 'px',
@@ -759,7 +847,8 @@ export class Editor {
     const fit = () => { ta.style.height = 'auto'; ta.style.height = Math.max(ta.scrollHeight, r.h * z) + 'px'; };
     restyle(); ta.addEventListener('input', fit);
     pe.edit.append(ta); fit();
-    requestAnimationFrame(() => { ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); });
+    const place = () => { ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); };
+    place(); requestAnimationFrame(() => { if (document.activeElement !== ta) place(); });
     this.renderProps();
     let done = false;
     const commit = async (cancel = false) => {
@@ -773,7 +862,7 @@ export class Editor {
         if (!text) return;
         const ch = await this.E.call<ObjChange>(existing ? 'replaceTextBox' : 'addTextBox', existing ? [this.doc.id, key, existing.objs, spec] : [this.doc.id, key, spec]);
         this.objEntry(existing ? '글상자 고치기' : '글상자', ch);
-        await this.reselectObj(page, ch.added[0]?.h);
+        if (existing) await this.reselectObj(page, ch.added[0]?.h); else await this.afterCreate(page, ch.added[0]?.h);
       } catch (e: any) { toast('글상자를 넣지 못했습니다: ' + e.message); }
     };
     ta.addEventListener('keydown', e => { e.stopPropagation(); if (e.key === 'Escape') { e.preventDefault(); commit(true); } else if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); commit(); } });
@@ -792,7 +881,7 @@ export class Editor {
   }
 
   /* ───────────── 고른 것 옮기기 / 크기 / 지우기 ───────────── */
-  private selObjs(): number[] { const s = this.sel; return !s ? [] : s.kind === 'run' ? s.run.objs : s.kind === 'obj' ? (s.obj.objs || [s.obj.h]) : []; }
+  private selObjs(): number[] { return this.allSel().flatMap(s => s.kind === 'run' ? s.run.objs : s.kind === 'obj' ? (s.obj.objs || [s.obj.h]) : []); }
   private async moveSel(dx: number, dy: number, merge = false) {
     const s = this.sel; if (!s || s.kind === 'annot') return;
     const id = this.doc.id, key = s.key, objs = this.selObjs();
@@ -800,7 +889,7 @@ export class Editor {
     const tr: any = await this.E.call('transformObjs', [id, key, gen, objs, dx, dy]);
     for (const k of tr?.also || []) this.changed(k);
     const shift = (r: Rect) => { r.x += dx; r.y += dy; };
-    shift(this.selRect()!);
+    for (const x of this.allSel()) shift(this.rectOf(x));
     if (merge && this.undoS.length && (this.undoS[this.undoS.length - 1] as any).nudgeKey === objs.join()) {
       const last: any = this.undoS[this.undoS.length - 1]; last.dx += dx; last.dy += dy;
     } else {
@@ -811,21 +900,22 @@ export class Editor {
       };
       this.push(entry);
     }
-    const keep = this.sel;
+    const keep = this.sel, keepMore = this.more;
     this.changed(key);
-    this.sel = keep; this.paintPage(s.page);
+    this.sel = keep; this.more = keepMore; this.paintPage(s.page);
   }
   async deleteSel() {
     const s = this.sel; if (!s) return;
-    this.sel = null;
+    const objs = this.selObjs(), many = this.more.length;
+    this.sel = null; this.more = [];
     if (s.kind === 'annot') {
       await this.E.call('setAnnotRemoved', [this.doc.id, s.key, s.annot.id, true]);
       const id = this.doc.id;
       this.push({ label: '주석 지우기', keys: [s.key], undo: () => this.E.call('setAnnotRemoved', [id, s.key, s.annot.id, false]), redo: () => this.E.call('setAnnotRemoved', [id, s.key, s.annot.id, true]) });
       this.changed(s.key); this.refreshAnnotList();
     } else {
-      const ch = await this.E.call<ObjChange>('removeObjs', [this.doc.id, s.key, this.selObjs()]);
-      this.objEntry(s.kind === 'run' ? '글자 지우기' : '객체 지우기', ch);
+      const ch = await this.E.call<ObjChange>('removeObjs', [this.doc.id, s.key, objs]);
+      this.objEntry(many ? `${many + 1}개 지우기` : s.kind === 'run' ? '글자 지우기' : '객체 지우기', ch);
     }
     this.renderProps(); this.app.updateStatus();
   }
@@ -839,7 +929,7 @@ export class Editor {
         : { kind: t, ...r, stroke: P.stroke, width: P.width, fill: P.fill === 'same' ? P.stroke : P.fill || undefined };
       const ch = await this.E.call<ObjChange>('addShape', [id, key, spec]);
       this.objEntry(t === 'line' ? '선' : t === 'rect' ? '사각형' : '원', ch);
-      await this.reselectObj(page, ch.added[0]?.h); // 방금 그린 도형을 골라 둔다 → 색·굵기·크기를 바로 고칠 수 있다
+      await this.afterCreate(page, ch.added[0]?.h); // 방금 그린 도형을 골라 둔다 → 색·굵기·크기를 바로 고칠 수 있다
     } else if (t === 'redact') {
       const textOnly = P.redactWhat === 'text';
       if (!(await confirmBox(textOnly ? '영역의 글자만 지우기' : '영역 삭제', (textOnly ? '고른 영역의 글자만 PDF에서 실제로 지웁니다. 그림·선·표 테두리는 그대로 남습니다.' : '고른 영역의 글자·그림·선을 PDF에서 실제로 지웁니다. 덮어 가리는 것이 아니어서 개인정보를 지울 때 안전합니다.') + ' 이 작업은 되돌릴 수 없고, 지금까지의 되돌리기 기록도 비워집니다.', '지우기', true))) return;
@@ -908,6 +998,7 @@ export class Editor {
         headerFill: s.head ? '#e9edf5' : undefined, headerBold: s.head,
       }]);
       this.objEntry('표 넣기', ch);
+      if (!this.toolLock) this.setTool('select');
       toast('표를 넣었습니다. 칸 글자는 “글자 고치기”로 나중에 고칠 수 있습니다.');
     } catch (e: any) { toast('표를 넣지 못했습니다: ' + e.message); }
   }
@@ -1249,7 +1340,7 @@ export class Editor {
     // 상황에 따라 뜻이 바뀌는 키만 여기서 처리한다 (나머지는 단축키 목록)
     if (e.ctrlKey || e.metaKey || e.altKey) return false;
     if ((e.key === 'Delete' || e.key === 'Backspace') && this.sel) { e.preventDefault(); this.deleteSel(); return true; }
-    if (e.key === 'Escape') { if (this.sel) { const p = this.sel.page; this.sel = null; this.paintPage(p); this.renderProps(); } else if (this.tool !== 'select' && this.tool !== 'aselect') this.setTool(this.tab === 'annot' ? 'aselect' : 'select'); this.app.updateStatus(); return true; }
+    if (e.key === 'Escape') { if (this.sel) { const p = this.sel.page; this.sel = null; this.more = []; this.paintPage(p); this.renderProps(); } else if (this.tool !== 'select' && this.tool !== 'aselect') this.setTool(this.tab === 'annot' ? 'aselect' : 'select'); this.app.updateStatus(); return true; }
     if (e.key === 'Enter' && this.sel?.kind === 'run') { e.preventDefault(); this.openRunEditor(this.sel.page, this.sel.run); return true; }
     if (this.sel && this.sel.kind !== 'annot' && e.key.startsWith('Arrow')) {
       e.preventDefault();

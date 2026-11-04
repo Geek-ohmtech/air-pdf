@@ -21,6 +21,7 @@ async function readBatch(b: { mode: BatchMode | null; files: string[] }): Promis
   for (const pth of b.files) { try { files.push(await readPath(pth)); } catch { /* 없는 파일 */ } }
   return { mode: b.mode, files };
 }
+let listening: Promise<unknown> = Promise.resolve();
 export function createDesktop(): Platform {
   const win = getCurrentWindow();
   const p: Platform = {
@@ -51,15 +52,22 @@ export function createDesktop(): Platform {
       return { name: baseName(path), path };
     },
     async initialFiles() {
+      await listening; // 이벤트를 받을 준비가 된 뒤에 모인 파일을 받아야 중간에 온 파일을 놓치지 않는다
       return readBatch(await invoke<{ mode: BatchMode | null; files: string[] }>('initial_files'));
     },
     onExternalOpen(cb) {
-      getCurrentWebview().onDragDropEvent(async e => {
-        if (e.payload.type !== 'drop') return;
-        const pdfs = e.payload.paths.filter(x => /\.pdf$/i.test(x));
-        if (pdfs.length) cb(await readBatch({ mode: null, files: pdfs }));
+      listening = listen<{ mode: BatchMode | null; files: string[] }>('open-files', async e => cb(await readBatch(e.payload)));
+    },
+    onFileDrag(cb) {
+      let paths: string[] = [];
+      getCurrentWebview().onDragDropEvent(e => {
+        const p: any = e.payload, r = devicePixelRatio || 1;
+        const x = (p.position?.x ?? 0) / r, y = (p.position?.y ?? 0) / r;
+        if (p.type === 'enter') { paths = p.paths || []; cb({ type: 'over', x, y, paths }); }
+        else if (p.type === 'over') cb({ type: 'over', x, y, paths });
+        else if (p.type === 'drop') { cb({ type: 'drop', x, y, paths: p.paths || paths }); paths = []; }
+        else { cb({ type: 'leave', x: 0, y: 0, paths: [] }); paths = []; }
       });
-      listen<{ mode: BatchMode | null; files: string[] }>('open-files', async e => cb(await readBatch(e.payload)));
     },
     async pickFolder() { const r = await open({ directory: true }); return typeof r === 'string' ? r : null; },
     async writeInFolder(dir, name, bytes) {
