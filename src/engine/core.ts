@@ -1192,6 +1192,7 @@ export class PdfEngine {
       if (t !== OBJ_IMAGE && t !== OBJ_PATH && t !== OBJ_TEXT) return;
       const meta = !fm && t !== OBJ_IMAGE ? this.metaOf(o) : null;
       if (t === OBJ_TEXT && meta?.t !== 'tb') return;
+      if (meta?.t === 'ocrfix') return; // 스캔 글자를 고친 자리의 덮개는 페이지의 일부
       let b = this.objBounds(o); if (!b) return;
       if (fm) b = this.mapBounds(b, fm);
       if (meta?.t === 'tb') {
@@ -1216,7 +1217,9 @@ export class PdfEngine {
         if (!fill && !stroke) return;
         vis = { fill, stroke, ghost: fill && !stroke && fc[0] > 245 && fc[1] > 245 && fc[2] > 245 };
       }
-      out.push({ h: o, type: t === OBJ_IMAGE ? 'image' : meta?.t === 'shape' ? 'shape' : meta?.t === 'free' ? 'free' : 'path', rect, inForm: !!fm, meta: meta || undefined, objs: [o], vis });
+      // 페이지 대부분을 덮는 그림(스캔·사진 PDF)은 페이지 바탕: 눌러서 잡지 않는다 (Alt+클릭으로는 잡힘)
+      const bg = t === OBJ_IMAGE && rect.w * rect.h > pc.w * pc.h * 0.6;
+      out.push({ h: o, type: t === OBJ_IMAGE ? 'image' : meta?.t === 'shape' ? 'shape' : meta?.t === 'free' ? 'free' : 'path', rect, inForm: !!fm, meta: meta || undefined, objs: [o], vis, bg: bg || undefined });
     });
     for (const gr of groups.values()) {
       // 글상자의 영역은 적어 둔 위치·폭을 쓴다 (글자 상자보다 정확)
@@ -1275,6 +1278,38 @@ export class PdfEngine {
     return { key, gen: this.gen(d, key), removed: [], added: [{ h: o, idx: this.P.FPDFPage_CountObjects(pc.page) - 1 }], substituted: false };
   }
 
+  /** 스캔 페이지의 바탕 그림을 원래 해상도로 꺼낸다 (보정용). 해당 없으면 null (그때는 화면 그림을 쓴다) */
+  pageImage(docId: number, key: number): { data: Uint8ClampedArray; width: number; height: number } | null {
+    const d = this.D(docId); const pc = this.pageByKey(d, key);
+    if (this.P.FPDFPage_GetRotation(pc.page) !== 0) return null;
+    const n = this.P.FPDFPage_CountObjects(pc.page);
+    let best = 0, area = 0;
+    for (let i = 0; i < n; i++) {
+      const o = this.P.FPDFPage_GetObject(pc.page, i);
+      if (this.P.FPDFPageObj_GetType(o) !== OBJ_IMAGE) continue;
+      const b = this.objBounds(o); if (!b) continue;
+      const a2 = (b[2] - b[0]) * (b[3] - b[1]); if (a2 > area) { area = a2; best = o; }
+    }
+    if (!best || area < pc.w * pc.h * 0.6) return null;
+    const bm = this.P.FPDFImageObj_GetRenderedBitmap(d.doc, pc.page, best); if (!bm) return null;
+    try {
+      const w = this.P.FPDFBitmap_GetWidth(bm), h = this.P.FPDFBitmap_GetHeight(bm);
+      if (w * h > 16_000_000 || w < 200 || h < 200) return null;
+      const fmt = this.P.FPDFBitmap_GetFormat(bm), stride = this.P.FPDFBitmap_GetStride(bm), ptr = this.P.FPDFBitmap_GetBuffer(bm), H8 = this.M.HEAPU8;
+      const out = new Uint8ClampedArray(w * h * 4);
+      for (let y = 0; y < h; y++) {
+        const row = ptr + y * stride;
+        for (let x = 0; x < w; x++) {
+          const o = (y * w + x) * 4;
+          if (fmt === 1) { const g = H8[row + x]; out[o] = out[o + 1] = out[o + 2] = g; out[o + 3] = 255; }
+          else { const bpp = fmt === 2 ? 3 : 4, s2 = row + x * bpp; out[o] = H8[s2 + 2]; out[o + 1] = H8[s2 + 1]; out[o + 2] = H8[s2]; out[o + 3] = fmt === 4 ? H8[s2 + 3] : 255; }
+        }
+      }
+      // 투명한 곳은 흰 바탕으로
+      for (let j = 3; j < out.length; j += 4) if (out[j] < 255) { const a3 = out[j] / 255; out[j - 3] = out[j - 3] * a3 + 255 * (1 - a3); out[j - 2] = out[j - 2] * a3 + 255 * (1 - a3); out[j - 1] = out[j - 1] * a3 + 255 * (1 - a3); out[j] = 255; }
+      return { data: out, width: w, height: h };
+    } finally { this.P.FPDFBitmap_Destroy(bm); }
+  }
   /** 페이지 내용을 그림 한 장으로 바꾼다 (문서 보정). 원래 객체는 떼어 두어 되돌리기에 쓴다 */
   replaceWithImage(docId: number, key: number, spec: { bytes: Uint8Array; kind: 'jpg' | 'png'; iw?: number; ih?: number }): ObjChange {
     const d = this.D(docId); const pc = this.pageByKey(d, key);
@@ -1553,6 +1588,11 @@ export class PdfEngine {
     const all = words.map(w => w.text).join('');
     if (!all.trim()) return { key, gen: this.gen(d, key), removed: [], added: [], substituted: true };
     const font = await this.loadSubsetFont(d, all);
+    // 다시 인식하면 예전 글자층(보이지 않는 글자)은 떼어 내고 새로 얹는다 (되돌리면 예전 것이 돌아온다)
+    const removed: { h: number; idx: number }[] = [];
+    const n0 = this.P.FPDFPage_CountObjects(pc.page);
+    for (let i = 0; i < n0; i++) { const o = this.P.FPDFPage_GetObject(pc.page, i); if (this.P.FPDFPageObj_GetType(o) === OBJ_TEXT && this.P.FPDFTextObj_GetTextRenderMode(o) === TEXTMODE_INVISIBLE) removed.push({ h: o, idx: i }); }
+    for (const r of [...removed].reverse()) this.P.FPDFPage_RemoveObject(pc.page, r.h);
     const added: { h: number; idx: number }[] = [];
     for (const wd of words) {
       if (!wd.text.trim()) continue;
@@ -1568,7 +1608,45 @@ export class PdfEngine {
       added.push({ h: o, idx: this.P.FPDFPage_CountObjects(pc.page) - 1 });
     }
     this.touch(pc);
-    return { key, gen: this.gen(d, key), removed: [], added, substituted: true };
+    return { key, gen: this.gen(d, key), removed, added, substituted: true };
+  }
+  /**
+   * 스캔 글자 고치기: OCR 글자층(보이지 않는 글자)을 고치면, 그 자리의 그림 글자를 종이색으로 덮고
+   * 새 글자를 보이게 쓴다. 빈 글로 고치면 그림 속 글자를 지운 것처럼 덮기만 한다.
+   */
+  async editOcrRun(docId: number, key: number, objs: number[], newText: string, o: { bg: string; color: string; font?: string }): Promise<ObjChange> {
+    const d = this.D(docId); const pc = this.pageByKey(d, key); this.assertOwned(pc, objs);
+    const also = this.liftObjs(d, pc, objs);
+    let u = [Infinity, Infinity, -Infinity, -Infinity];
+    for (const ob of objs) { const b = this.objBounds(ob); if (b) u = [Math.min(u[0], b[0]), Math.min(u[1], b[1]), Math.max(u[2], b[2]), Math.max(u[3], b[3])]; }
+    const r = this.toDisp(pc, u[0], u[1], u[2], u[3]);
+    const first = objs[0], m = this.objMatrix(first), vs = this.fontSize(first) * Math.hypot(m[2], m[3]);
+    const oy = ap(pc.m, m[4], m[5])[1]; // 첫 낱말의 기준선 (화면 좌표)
+    const removed = objs.map(h => ({ h, idx: this.objIndex(pc, h) }));
+    for (const ob of objs) this.P.FPDFPage_RemoveObject(pc.page, ob);
+    const added: { h: number; idx: number }[] = [];
+    // 그림 글자 덮기 (조금 넉넉하게)
+    const pad = Math.max(0.6, r.h * 0.12);
+    const patch = this.addSegPath(pc, this.shapeSegs('rect', r.x - pad, r.y - pad, r.w + pad * 2, r.h + pad * 2), { fill: o.bg });
+    this.setObjMeta(d, patch, { t: 'ocrfix' });
+    added.push({ h: patch, idx: this.P.FPDFPage_CountObjects(pc.page) - 1 });
+    const text = newText.replace(/\r/g, '').split('\n')[0].trim();
+    if (text) {
+      const font = await this.loadSubsetFont(d, text, o.font);
+      const size = Math.max(3, vs * 0.95);
+      const t = this.P.FPDFPageObj_CreateTextObj(d.doc, font, size);
+      const w = this.wstr(text); this.P.FPDFText_SetText(t, w); this.free(w);
+      this.setMatrix(t, this.uprightMatrix(pc, r.x, oy, 1));
+      // 원래보다 많이 길면 원래 폭에 맞춰 조금 좁힌다
+      const b = this.objBounds(t);
+      if (b) { const rr = this.toDisp(pc, b[0], b[1], b[2], b[3]); if (rr.w > r.w * 1.12 && rr.w > 1) this.setMatrix(t, this.uprightMatrix(pc, r.x, oy, Math.max(0.6, r.w * 1.05 / rr.w))); }
+      const [R, G, B] = fromHex(o.color);
+      this.P.FPDFPageObj_SetFillColor(t, R, G, B, 255);
+      this.P.FPDFPage_InsertObject(pc.page, t);
+      added.push({ h: t, idx: this.P.FPDFPage_CountObjects(pc.page) - 1 });
+    }
+    this.touch(pc);
+    return { key, gen: this.gen(d, key), removed, added, substituted: true, also };
   }
   hasText(docId: number, index: number) { const pc = this.page(this.D(docId), index); return this.P.FPDFText_CountChars(this.textPage(pc)) > 0; }
 
@@ -1660,10 +1738,11 @@ export class PdfEngine {
 
   /* ───────────── 이미지 → 페이지 ───────────── */
   /** 이미지 한 장을 새 페이지로. mode 'a4': A4 안에 여백 두고 맞춤 / 'image': 이미지 크기 그대로(150dpi 기준) */
-  addImagePage(docId: number, at: number, spec: { bytes: Uint8Array; kind: 'jpg' | 'png'; w: number; h: number }, mode: 'a4' | 'image' = 'a4') {
+  addImagePage(docId: number, at: number, spec: { bytes: Uint8Array; kind: 'jpg' | 'png'; w: number; h: number }, mode: 'a4' | 'image' | 'fit' = 'a4') {
     const d = this.D(docId);
     let pw: number, ph: number, iw: number, ih: number;
     if (mode === 'image') { pw = iw = Math.max(72, spec.w * 72 / 150); ph = ih = Math.max(72, spec.h * 72 / 150); }
+    else if (mode === 'fit') { const k = 841.89 / Math.max(spec.w, spec.h); pw = iw = spec.w * k; ph = ih = spec.h * k; } // 그림이 곧 페이지 (긴 변 A4, 여백 없음)
     else {
       [pw, ph] = spec.w > spec.h ? [841.89, 595.28] : [595.28, 841.89];
       const k = Math.min((pw - 48) / spec.w, (ph - 48) / spec.h);

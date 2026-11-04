@@ -40,14 +40,14 @@ export async function loadImage(file: Blob, name = '이미지'): Promise<ImageSp
   return { bytes: new Uint8Array(await out.arrayBuffer()), kind: jpg ? 'jpg' : 'png', w, h: hgt, name };
 }
 
-type ImgPdfOpts = { mode: 'a4' | 'image'; correct: boolean; ocr: boolean };
+type ImgPdfOpts = { mode: 'fit' | 'a4' | 'image'; correct: boolean; ocr: boolean };
 /**
  * 이미지 → PDF 설정. 사진으로 찍은 문서라면 보정·글자 인식(OCR)을 함께 하자고 제안한다.
  * "다시 묻지 않기"를 선택하면 그 선택을 기억하고, 설정에서 다시 켤 수 있다.
  */
 async function askImagePdf(app: App, count: number, o: { ocr?: boolean; title?: string; ok?: string } = {}): Promise<ImgPdfOpts | null> {
   const P = app.prefs, def = P.scanDefault || { correct: true, ocr: true }, ask = P.scanSuggest !== false;
-  const sel = h('select', { class: 'field' }, h('option', { value: 'a4' }, 'A4에 맞추기 (가로·세로 자동, 여백 있음)'), h('option', { value: 'image' }, '이미지 크기 그대로'));
+  const sel = h('select', { class: 'field' }, h('option', { value: 'fit' }, '이미지가 곧 페이지 (A4 크기, 여백 없음)'), h('option', { value: 'a4' }, 'A4 종이에 얹기 (여백 있음)'), h('option', { value: 'image' }, '이미지 픽셀 크기 그대로'));
   const cb = (on: boolean) => h('input', { type: 'checkbox', checked: on ? '' : undefined }) as HTMLInputElement;
   const corr = cb(def.correct), ocr = cb(o.ocr !== false && def.ocr), never = cb(false);
   const box = ask ? h('div', { class: 'suggest' },
@@ -112,7 +112,13 @@ export async function imagesToPdf(app: App, files?: File[]) {
   } catch (e: any) { b.done(); toast('PDF를 만들지 못했습니다: ' + e.message); }
 }
 
-/** 편집 모드: 이미지를 페이지로 끼워 삽입 (되돌리기 지원은 편집기에서) */
+/** 이미지를 페이지로 넣기 전에: 페이지 크기·보정을 묻고 (보정하면) 보정한 파일을 돌려준다 */
+export async function prepareImagePages(app: App, files: File[], at: number) {
+  const opt = await askImagePdf(app, files.length, { ocr: false, title: `이미지 ${files.length}장을 ${at + 1}페이지 자리에 삽입`, ok: '삽입' }); if (!opt) return null;
+  const fixed = await maybeCorrect(files, opt.correct); if (!fixed) return null;
+  return { mode: opt.mode, files: fixed };
+}
+/** 편집 모드: 이미지를 페이지로 끼워 넣는다 (되돌리기 지원은 편집기에서) */
 export async function insertImagePages(app: App, at: number, files: File[]) {
   const opt = await askImagePdf(app, files.length, { ocr: false, title: `이미지 ${files.length}장을 페이지로 삽입`, ok: '삽입' }); if (!opt) return [];
   const fixed = await maybeCorrect(files, opt.correct); if (!fixed) return [];
@@ -320,7 +326,7 @@ export async function mergeFiles(app: App, src?: OpenedFile[]) {
         if (res.error !== 'password') break;
         b.done();
         const v = await promptBox('암호가 걸린 문서', `“${f.name}”의 암호를 입력하세요.`, '', { type: 'password', ok: '확인', error: pw ? '암호가 맞지 않습니다.' : undefined });
-        b.set('합치는 중…');
+        b.show('합치는 중…');
         if (v === null) break; pw = v;
       }
       if (res.keys) { at += res.keys.length; used++; } else if (res.error !== 'password') toast(`“${f.name}”은 읽을 수 없어 건너뛰었습니다.`);
@@ -358,4 +364,91 @@ export async function compressPdf(app: App) {
   const name = d.name.replace(/\.pdf$/i, '') + '_압축.pdf';
   if (choice.value === 'save') { const t = await app.platform.saveAs(name, res.bytes, 'pdf'); if (t) toast(`“${t.name}”로 저장했습니다 (${mb(res.after)}).`); }
   else await app.openFiles([{ name, bytes: res.bytes }], true);
+}
+
+/**
+ * 여러 파일 한꺼번에 처리: 문서 보정(그림 페이지만) · 방향 바로 세우기 · 글자 인식 · 용량 줄이기를 차례로.
+ * 설치판은 원본 옆이나 고른 폴더에, 웹은 ZIP 하나로 저장한다.
+ */
+export async function batchProcess(app: App, src?: OpenedFile[]) {
+  const list: OpenedFile[] = [...(src || [])];
+  if (!list.length) { const more = await app.platform.pickPdfs(true); if (!more.length) return; list.push(...more); }
+  const ul = h('ul', { class: 'batch-list' });
+  const draw = () => { ul.innerHTML = ''; list.forEach((f, i) => ul.append(h('li', {}, h('span', { class: 'merge-name', title: f.path || f.name }, f.name), h('button', { class: 'tb sm', type: 'button', title: '빼기', onclick: () => { list.splice(i, 1); draw(); } }, icon('close'))))); count.textContent = `${list.length}개 파일`; };
+  const count = h('span', { class: 'hint' });
+  const addBtn = h('button', { class: 'btn sm', type: 'button', onclick: async () => { const more = await app.platform.pickPdfs(true); for (const f of more) if (!list.some(x => x.path && x.path === f.path)) list.push(f); draw(); } }, icon('open'), 'PDF 추가…');
+  const cb = (on: boolean) => h('input', { type: 'checkbox', checked: on ? '' : undefined }) as HTMLInputElement;
+  const oCorrect = cb(true), oOrient = cb(true), oOcr = cb(true), oCompress = cb(false);
+  const mode = h('select', { class: 'field sm' }, h('option', { value: 'color' }, '선명한 컬러'), h('option', { value: 'gray' }, '회색조'), h('option', { value: 'bw' }, '흑백 문서'));
+  const level = h('select', { class: 'field sm' }, h('option', { value: '96,0.6' }, '많이'), h('option', { value: '150,0.72', selected: '' }, '보통'), h('option', { value: '220,0.82' }, '조금'));
+  const P = app.platform, canFolder = !!(P.pickFolder && P.writeInFolder);
+  const where = h('select', { class: 'field' }, ...(canFolder ? [h('option', { value: 'beside' }, '원본 옆에 (이름_처리.pdf)'), h('option', { value: 'folder' }, '폴더를 골라서')] : [h('option', { value: 'zip' }, 'ZIP 파일 하나로')]));
+  const op = (box: HTMLInputElement, title: string, sub: string, extra?: Node) => h('label', { class: 'chk' }, box, h('span', {}, title, h('small', {}, sub)), extra || null);
+  draw();
+  const r = await dialog({ title: '여러 파일 한꺼번에 처리', wide: true, body: h('div', { class: 'form' },
+    h('div', { class: 'batch-files' }, ul, h('div', { class: 'batch-files-bar' }, count, addBtn)),
+    h('div', { class: 'suggest' },
+      op(oCorrect, '문서 보정', '스캔·사진 페이지만: 반듯하게 펴기, 기울기·그늘·대비, 흐린 무늬·스캔 앱 표시 지우기', mode),
+      op(oOrient, '방향 바로 세우기', '옆으로 눕거나 거꾸로 된 페이지를 글자를 읽어 보고 바로 세웁니다'),
+      op(oOcr, '글자 인식 (OCR)', '글자가 없는 페이지에 찾기·복사가 되는 글자층을 얹습니다'),
+      op(oCompress, '용량 줄이기', '사진·스캔 그림의 해상도를 낮춰 다시 저장합니다', level)),
+    h('label', { class: 'lbl' }, '저장할 곳'), where,
+    h('p', { class: 'hint' }, '원본 파일은 바꾸지 않습니다. 글자로 된 페이지는 보정하지 않고 그대로 둡니다.')),
+    buttons: [{ label: '취소', value: false }, { label: '시작', value: true, primary: true }] });
+  if (!r?.value || !list.length) return;
+  const opts = { correct: oCorrect.checked, orient: oOrient.checked, ocr: oOcr.checked, compress: oCompress.checked, mode: mode.value as 'color' | 'gray' | 'bw', level: level.value.split(',').map(Number), where: where.value };
+  if (!opts.correct && !opts.orient && !opts.ocr && !opts.compress) { toast('할 일을 하나 이상 고르세요.'); return; }
+  let dir: string | null = null;
+  if (opts.where === 'folder') { dir = await P.pickFolder!(); if (!dir) return; }
+  const sc = await import('./scan/scan.ts'), ocr = await import('./editor/ocr.ts');
+  const b = busy('준비하는 중…');
+  let cancelled = false;
+  document.querySelector('.busy-card')?.append(h('button', { class: 'btn sm', type: 'button', onclick: () => { cancelled = true; b.set('이 파일까지 하고 멈춥니다…'); } }, '그만'));
+  const outs: { name: string; data: Uint8Array }[] = [], fails: string[] = [];
+  let saved = 0, lastPath = '';
+  try {
+    for (const [fi, f] of list.entries()) {
+      if (cancelled) break;
+      const tag = `(${fi + 1}/${list.length}) ${f.name}`;
+      b.set(`${tag} 여는 중…`);
+      const id = await openTemp(app, f); if (!id) { fails.push(f.name); continue; }
+      try {
+        const keys = await app.engine.call<number[]>('keys', [id]);
+        const scanned: { index: number; key: number }[] = [];
+        for (const [i, key] of keys.entries()) {
+          if (cancelled) break;
+          const pg = `${tag} · ${i + 1}/${keys.length}페이지`;
+          const raw = opts.correct || opts.orient ? await app.engine.call<{ data: Uint8ClampedArray; width: number; height: number } | null>('pageImage', [id, key]) : null;
+          let c: HTMLCanvasElement | null = null;
+          if (raw) { c = document.createElement('canvas'); c.width = raw.width; c.height = raw.height; c.getContext('2d')!.putImageData(new ImageData(raw.data as any, raw.width, raw.height), 0, 0); c = sc.toCanvas(c, 3000); }
+          else if (opts.orient) { const rr: any = await app.engine.call('render', [id, i, 110 / 72, undefined, false, false]); c = document.createElement('canvas'); c.width = rr.width; c.height = rr.height; c.getContext('2d')!.drawImage(rr.bitmap, 0, 0); rr.bitmap.close(); }
+          let deg: 0 | 90 | 180 | 270 = 0;
+          if (opts.orient && c) { b.set(`${pg} 방향 확인 중…`); deg = await ocr.detectOrientation(c); }
+          if (opts.correct && raw && c) {
+            b.set(`${pg} 보정 중…`);
+            const out = sc.process(c, { quad: sc.detectQuad(c), mode: opts.mode, deskew: true, turn: deg, clean: true, mark: true });
+            const bytes = new Uint8Array(await (await sc.toBlob(out, 'color')).arrayBuffer());
+            await app.engine.call('replaceWithImage', [id, key, { bytes, kind: 'jpg', iw: out.width, ih: out.height }]);
+          } else if (deg) await app.engine.call('rotatePage', [id, key, deg / 90]);
+          if (opts.ocr && !(await app.engine.call<boolean>('hasText', [id, i]))) scanned.push({ index: i, key });
+        }
+        if (opts.ocr && scanned.length && !cancelled) await ocr.ocrPages(app.engine, id, scanned, { progress: m => b.set(`${tag} · ${m}`), cancelled: () => cancelled });
+        b.set(`${tag} 저장하는 중…`);
+        let data: Uint8Array;
+        if (opts.compress) data = (await app.engine.call<{ bytes: Uint8Array }>('compressCopy', [id, { dpi: opts.level[0], quality: opts.level[1] }], { progress: (p: any) => b.set(`${tag} 용량 줄이는 중… ${p.done}/${p.total}`) })).bytes;
+        else data = await app.engine.call<Uint8Array>('save', [id]);
+        const name = f.name.replace(/\.pdf$/i, '') + '_처리.pdf';
+        if (opts.where === 'zip') outs.push({ name, data });
+        else {
+          const target = opts.where === 'folder' ? dir! : (f.path ? f.path.replace(/[\\/][^\\/]*$/, '') : '');
+          if (!target) { outs.push({ name, data }); continue; }
+          lastPath = await P.writeInFolder!(target, name, data); saved++;
+        }
+      } catch (e: any) { fails.push(`${f.name} (${e?.message || e})`); }
+      finally { app.engine.call('close', [id]).catch(() => {}); }
+    }
+  } finally { b.done(); }
+  if (outs.length) await saveMany(app, outs, `처리한 PDF ${outs.length}개.zip`, 'pdf');
+  const msg = `${saved + outs.length}개 파일을 처리했습니다${cancelled ? ' (도중에 멈춤)' : ''}.${fails.length ? ` 처리하지 못한 파일: ${fails.join(', ')}` : ''}`;
+  toast(msg, 6000, lastPath && P.reveal ? { label: '폴더 열기', run: () => P.reveal!(lastPath) } : undefined);
 }

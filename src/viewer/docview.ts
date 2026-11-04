@@ -174,10 +174,10 @@ export class DocView {
   /* ───────────── 보이는 페이지 관리와 렌더링 ───────────── */
   schedule() { if (!this.raf) this.raf = requestAnimationFrame(() => { this.raf = 0; this.update(); }); }
   private update() {
-    if (!this.slots.length) return;
+    if (!this.slots.length || !this.pages.length) return;
     const top = this.el.scrollTop, bottom = top + this.el.clientHeight, buf = this.el.clientHeight;
     const want = new Set<number>();
-    for (let i = this.firstSlotAt(top - buf); i < this.slots.length; i++) {
+    for (let i = this.firstSlotAt(top - buf); i < Math.min(this.slots.length, this.pages.length); i++) {
       const s = this.slots[i]; if (s.top > bottom + buf) break;
       if (s.top + s.h >= top - buf) want.add(i);
     }

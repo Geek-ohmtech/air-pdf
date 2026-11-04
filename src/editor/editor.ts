@@ -477,7 +477,7 @@ export class Editor {
     if (tool === 'editText' || tool === 'select') {
       const runs = this.now(this.runs, pe.index);
       if (!runs) this.getRuns(pe.index).then(() => this.V.pageEl(pe.index) && this.paint(this.V.pageEl(pe.index)!));
-      else if (tool === 'editText') for (const r of runs) if (!r.invisible) svg.append(svgEl('rect', { class: 'run-hint', x: r.rect.x - 1, y: r.rect.y - 1, width: r.rect.w + 2, height: r.rect.h + 2 }));
+      else if (tool === 'editText') for (const r of runs) svg.append(svgEl('rect', { class: 'run-hint' + (r.invisible ? ' ocr' : ''), x: r.rect.x - 1, y: r.rect.y - 1, width: r.rect.w + 2, height: r.rect.h + 2 }));
       if (tool === 'select' && !this.now(this.objs, pe.index)) this.getObjs(pe.index);
     }
     if (tool === 'aselect' && !this.now(this.annots, pe.index)) this.getAnnots(pe.index).then(() => this.V.pageEl(pe.index) && this.paint(this.V.pageEl(pe.index)!));
@@ -539,13 +539,16 @@ export class Editor {
   }
 
   /* ───────────── 마우스 ───────────── */
-  private hitRun(page: number, x: number, y: number) { const runs = this.now(this.runs, page); return runs?.filter(r => !r.invisible).reverse().find(r => inRect(r.rect, x, y, 1.5)) || null; }
+  /** 글자 줄 찾기. 스캔 글자(OCR, 보이지 않는 글자)는 글자 수정 도구나 두 번 누를 때만 */
+  private hitRun(page: number, x: number, y: number, ocr = this.tool === 'editText') { const runs = this.now(this.runs, page); return runs?.filter(r => ocr || !r.invisible).reverse().find(r => inRect(r.rect, x, y, 1.5)) || null; }
   /** 눌러서 고를 객체: 흰색으로만 칠한 상자(표 칸 바탕 등)는 건너뛰고, 선만 있는 원본 도형은 선 가까이를 눌러야 잡힌다 */
+  private altKey = false;
   private hitObj(page: number, x: number, y: number) {
     const objs = this.now(this.objs, page); if (!objs) return null;
     const tol = Math.max(2, 5 / this.V.zoom);
     return objs.slice().reverse().find(o => {
       if (!inRect(o.rect, x, y, 2)) return false;
+      if (o.bg && !this.altKey) return false; // 스캔 페이지의 바탕 그림
       if (!o.vis) return true;
       if (o.vis.ghost) return false;
       if (o.vis.fill) return true;
@@ -580,6 +583,7 @@ export class Editor {
   }
 
   private down(e: PointerEvent, page: number, x: number, y: number): boolean {
+    this.altKey = e.altKey;
     if (this.editing) { this.editing.commit(); if (this.tool === 'addText' || this.tool === 'editText') return true; }
     const key = this.V.pages[page].key;
     const t = this.tool;
@@ -746,7 +750,7 @@ export class Editor {
     const inside = (q: Rect) => q.x >= r.x && q.y >= r.y && q.x + q.w <= r.x + r.w && q.y + q.h <= r.y + r.h;
     const got: Sel[] = [
       ...runs.filter(x => !x.invisible && inside(x.rect)).map(run => ({ kind: 'run', page, key, run }) as Sel),
-      ...objs.filter(o => inside(o.rect) && !o.vis?.ghost).map(obj => ({ kind: 'obj', page, key, obj }) as Sel)];
+      ...objs.filter(o => inside(o.rect) && !o.vis?.ghost && !o.bg).map(obj => ({ kind: 'obj', page, key, obj }) as Sel)];
     const all = d.add && this.sel?.page === page ? [...this.allSel()] : [];
     for (const g of got) if (!all.some(a => this.sameSel(a, g))) all.push(g);
     this.sel = all[0] || null; this.more = all.slice(1);
@@ -754,7 +758,7 @@ export class Editor {
   }
   private dbl(_e: MouseEvent, page: number, x: number, y: number) {
     if (this.tool === 'select' || this.tool === 'editText' || this.tool === 'textbox') {
-      const run = this.hitRun(page, x, y);
+      const run = this.hitRun(page, x, y, true);
       if (run) { this.openRunEditor(page, run); return true; }
       const obj = this.hitObj(page, x, y);
       if (obj?.type === 'textbox') { this.openTextBoxEditor(page, obj.rect, obj); return true; }
@@ -833,6 +837,7 @@ export class Editor {
     const ta = this.placeEditor(page, { x: run.rect.x - 2, y: run.rect.y - run.size * 0.12, w: run.rect.w, h: run.rect.h }, run.size, { font: this.fontFor(run), color: run.color, bold: run.bold, text: run.text, minW: run.rect.w + 4 });
     if (!ta) return;
     ta.classList.add('cover');
+    if (run.invisible) { ta.classList.add('ocr'); ta.title = '스캔 글자(OCR)를 고칩니다: 그림 속 글자를 종이색으로 덮고 새 글자를 씁니다'; }
     let done = false;
     const commit = async (cancel = false) => {
       if (done) return; done = true; this.editing = null;
@@ -840,6 +845,13 @@ export class Editor {
       ta.remove();
       if (cancel || text === run.text) return;
       try {
+        if (run.invisible) {
+          // 스캔 글자: 그 자리 그림에서 종이색·글자색을 읽어 덮고 새로 쓴다
+          const col = await this.sampleColors(page, run.rect);
+          const ch = await this.E.call<ObjChange>('editOcrRun', [this.doc.id, key, run.objs, text, { bg: col.bg, color: col.fg, font: this.props.font }]);
+          this.objEntry(text ? '스캔 글자 수정' : '스캔 글자 삭제', ch);
+          return;
+        }
         if (!text) { const ch = await this.E.call<ObjChange>('removeObjs', [this.doc.id, key, run.objs]); this.objEntry('글자 삭제', ch); return; }
         const ch = await this.E.call<ObjChange>('editRun', [this.doc.id, key, run.objs, text]);
         this.objEntry('글자 수정', ch);
@@ -848,6 +860,23 @@ export class Editor {
     };
     this.bindEditorKeys(ta, commit);
     this.editing = { ta, commit, kind: 'run', at: { page, x: run.rect.x + Math.min(4, run.rect.w / 2), y: run.rect.y + run.rect.h / 2 } };
+  }
+  /** 페이지 그림에서 그 자리의 종이색(밝은 쪽)과 글자색(어두운 쪽)을 읽는다 */
+  private async sampleColors(page: number, r: Rect): Promise<{ bg: string; fg: string }> {
+    const k = 3, pad = 2;
+    const region = { x: Math.max(0, (r.x - pad) * k), y: Math.max(0, (r.y - pad) * k), w: (r.w + pad * 2) * k, h: (r.h + pad * 2) * k };
+    try {
+      const res: any = await this.E.call('render', [this.doc.id, page, k, region, false, false]);
+      const c = document.createElement('canvas'); c.width = res.width; c.height = res.height;
+      const g = c.getContext('2d', { willReadFrequently: true })!;
+      if (res.bitmap) { g.drawImage(res.bitmap, 0, 0); res.bitmap.close(); } else g.putImageData(new ImageData(res.data, res.width, res.height), 0, 0);
+      const d = g.getImageData(0, 0, c.width, c.height).data, px: [number, number, number, number][] = [];
+      for (let i = 0; i < d.length; i += 4) px.push([d[i] * 0.299 + d[i + 1] * 0.587 + d[i + 2] * 0.114, d[i], d[i + 1], d[i + 2]]);
+      px.sort((a, b) => a[0] - b[0]);
+      const avg = (a: typeof px) => '#' + [1, 2, 3].map(j => Math.round(a.reduce((s, p) => s + p[j], 0) / Math.max(1, a.length)).toString(16).padStart(2, '0')).join('');
+      const n = px.length;
+      return { bg: avg(px.slice(Math.floor(n * 0.6))), fg: avg(px.slice(0, Math.max(1, Math.floor(n * 0.06)))) };
+    } catch { return { bg: '#ffffff', fg: '#1a1a1a' }; }
   }
   private openNewTextEditor(page: number, x: number, y: number) {
     this.commitPending();
@@ -1286,12 +1315,12 @@ export class Editor {
   async imagePages(files?: File[], atIndex?: number) {
     if (!files) files = await this.app.platform.pickImages();
     if (!files.length) return;
-    const { loadImage } = await import('../tools.ts');
-    const sel = h('select', { class: 'field' }, h('option', { value: 'a4' }, 'A4에 맞추기'), h('option', { value: 'image' }, '이미지 크기 그대로'));
-    const r = await dialog({ title: `이미지 ${files.length}장을 페이지로 삽입`, body: h('div', { class: 'form' }, h('label', { class: 'lbl' }, '페이지 크기'), sel, h('p', { class: 'hint' }, `${(atIndex ?? this.V.current + 1) + 1}페이지 자리에 넣습니다.`)), buttons: [{ label: '취소', value: false }, { label: '삽입', value: true, primary: true }], collect: () => sel.value });
-    if (!r?.value) return;
-    const id = this.doc.id, at = atIndex ?? this.V.current + 1, mode = r.data;
-    const specs: any[] = []; for (const f of files) { try { specs.push(await loadImage(f, f.name)); } catch { toast(`“${f.name}”은 읽을 수 없는 이미지입니다.`); } }
+    const { loadImage, prepareImagePages } = await import('../tools.ts');
+    const at = atIndex ?? this.V.current + 1;
+    const prep = await prepareImagePages(this.app, files, at); if (!prep) return;
+    const list = prep.files;
+    const id = this.doc.id, mode = prep.mode;
+    const specs: any[] = []; for (const f of list) { try { specs.push(await loadImage(f, f.name)); } catch { toast(`“${f.name}”은 읽을 수 없는 이미지입니다.`); } }
     if (!specs.length) return;
     const cur = { keys: [] as number[] };
     const add = async () => { cur.keys = []; for (let i = 0; i < specs.length; i++) cur.keys.push(await this.E.call<number>('addImagePage', [id, at + i, specs[i], mode])); };
@@ -1356,10 +1385,17 @@ export class Editor {
     const srcs: { name: string; canvas: HTMLCanvasElement }[] = [];
     try {
       for (const i of idx) {
-        const r: any = await this.E.call('render', [id, i, 220 / 72, undefined, false, false]);
-        const c = document.createElement('canvas'); c.width = r.width; c.height = r.height;
-        const g = c.getContext('2d')!; if (r.bitmap) { g.drawImage(r.bitmap, 0, 0); r.bitmap.close(); } else g.putImageData(new ImageData(r.data, r.width, r.height), 0, 0);
-        srcs.push({ name: `${i + 1}페이지`, canvas: c });
+        // 스캔 페이지면 바탕 그림을 원래 해상도로 (여백 없이), 아니면 화면에 그린 그림으로
+        const raw = await this.E.call<{ data: Uint8ClampedArray; width: number; height: number } | null>('pageImage', [id, this.V.pages[i].key]);
+        const c = document.createElement('canvas');
+        if (raw) { c.width = raw.width; c.height = raw.height; c.getContext('2d')!.putImageData(new ImageData(raw.data as any, raw.width, raw.height), 0, 0); }
+        else {
+          const r: any = await this.E.call('render', [id, i, 220 / 72, undefined, false, false]);
+          c.width = r.width; c.height = r.height;
+          const g = c.getContext('2d')!; if (r.bitmap) { g.drawImage(r.bitmap, 0, 0); r.bitmap.close(); } else g.putImageData(new ImageData(r.data, r.width, r.height), 0, 0);
+        }
+        const { toCanvas } = await import('../scan/scan.ts');
+        srcs.push({ name: `${i + 1}페이지`, canvas: toCanvas(c, 3000) });
       }
     } finally { b.done(); }
     const out = await scanDialog(srcs, { title: idx.length > 1 ? `문서 보정 (${idx.length}페이지)` : '문서 보정', ok: '보정 적용' });
@@ -1384,7 +1420,7 @@ export class Editor {
       try {
         const { ocrPages } = await import('./ocr.ts');
         const r = await ocrPages(this.E, id, changes.map(c => ({ index: this.V.pages.findIndex(p => p.key === c.key), key: c.key })), { progress: m => b3.set(m) });
-        if (r.changes.length) this.push({ label: '글자 인식', keys: r.changes.map(c => c.key), undo: async () => { for (const c of r.changes) await this.E.call('detach', [id, c.key, c.gen, c.added]); }, redo: async () => { for (const c of r.changes) await this.E.call('attach', [id, c.key, c.gen, c.added]); } });
+        if (r.changes.length) this.push({ label: '글자 인식', keys: r.changes.map(c => c.key), undo: async () => { for (const c of r.changes) { await this.E.call('detach', [id, c.key, c.gen, c.added]); await this.E.call('attach', [id, c.key, c.gen, c.removed]); } }, redo: async () => { for (const c of r.changes) { await this.E.call('detach', [id, c.key, c.gen, c.removed]); await this.E.call('attach', [id, c.key, c.gen, c.added]); } } });
         for (const c of r.changes) this.changed(c.key);
         toast(`낱말 ${r.words}개를 인식했습니다. 이제 찾기(Ctrl+F)가 됩니다.`, 4000);
       } catch (e: any) { toast('글자 인식을 하지 못했습니다: ' + e.message); }
@@ -1393,7 +1429,9 @@ export class Editor {
   }
   private async ocrDialog() {
     const sel = h('select', { class: 'field' }, h('option', { value: 'cur' }, `현재 페이지 (${this.V.current + 1}페이지)`), h('option', { value: 'empty' }, '글자가 없는 페이지 모두 (스캔 페이지)'), h('option', { value: 'all' }, '모든 페이지'));
-    const r = await dialog({ title: '글자 인식 (OCR)', body: h('div', { class: 'form' }, h('p', {}, '스캔한 페이지의 글자를 한국어·영어로 인식해 보이지 않는 글자층으로 얹습니다. 모양은 그대로이고, 저장하면 다른 프로그램에서도 검색·복사가 됩니다. 인식은 이 컴퓨터 안에서만 합니다.'), h('label', { class: 'lbl' }, '대상'), sel), buttons: [{ label: '취소', value: false }, { label: '인식 시작', value: true, primary: true }], collect: () => sel.value });
+    const up = h('input', { type: 'checkbox', checked: '' }) as HTMLInputElement;
+    const r = await dialog({ title: '글자 인식 (OCR)', body: h('div', { class: 'form' }, h('p', {}, '스캔한 페이지의 글자를 한국어·영어로 인식해 보이지 않는 글자층으로 얹습니다. 모양은 그대로이고, 저장하면 다른 프로그램에서도 검색·복사가 됩니다. 다시 인식하면 예전 글자층을 바꿉니다. 인식은 이 컴퓨터 안에서만 합니다.'), h('label', { class: 'lbl' }, '대상'), sel,
+      h('label', { class: 'chk' }, up, ' 옆으로 눕거나 거꾸로 된 페이지는 먼저 바로 세우기')), buttons: [{ label: '취소', value: false }, { label: '인식 시작', value: true, primary: true }], collect: () => sel.value });
     if (!r?.value) return;
     const which = r.data as string;
     const id = this.doc.id;
@@ -1404,22 +1442,23 @@ export class Editor {
     const cancelBtn = h('button', { class: 'btn sm', type: 'button', onclick: () => { cancelled = true; } }, '그만');
     document.querySelector('.busy-card')?.append(cancelBtn);
     const changes: ObjChange[] = [];
-    let done = 0, words = 0;
+    let done = 0, words = 0, rotated: { key: number; turns: number }[] = [];
     try {
       const { ocrPages } = await import('./ocr.ts');
-      const r = await ocrPages(this.E, id, pages.map(i => ({ index: i, key: keysAt[i] })), { skipText: which === 'empty', progress: m => b.set(m), cancelled: () => cancelled });
-      changes.push(...r.changes); done = r.done; words = r.words;
+      const r = await ocrPages(this.E, id, pages.map(i => ({ index: i, key: keysAt[i] })), { skipText: which === 'empty', progress: m => b.set(m), cancelled: () => cancelled, upright: up.checked });
+      changes.push(...r.changes); done = r.done; words = r.words; rotated = r.rotated;
       for (const c of r.changes) this.changed(c.key);
     } catch (e: any) { b.done(); toast('글자 인식을 하지 못했습니다: ' + e.message, 5000); return; }
     b.done();
-    if (changes.length) {
+    if (changes.length || rotated.length) {
       this.push({
-        label: '글자 인식', keys: changes.map(c => c.key),
-        undo: async () => { for (const c of changes) await this.E.call('detach', [id, c.key, c.gen, c.added]); },
-        redo: async () => { for (const c of changes) await this.E.call('attach', [id, c.key, c.gen, c.added]); },
+        label: '글자 인식', keys: changes.map(c => c.key), structural: rotated.length > 0,
+        undo: async () => { for (const c of changes) { await this.E.call('detach', [id, c.key, c.gen, c.added]); await this.E.call('attach', [id, c.key, c.gen, c.removed]); } for (const t of rotated) await this.E.call('rotatePage', [id, t.key, -t.turns]); },
+        redo: async () => { for (const t of rotated) await this.E.call('rotatePage', [id, t.key, t.turns]); for (const c of changes) { await this.E.call('detach', [id, c.key, c.gen, c.removed]); await this.E.call('attach', [id, c.key, c.gen, c.added]); } },
       });
+      if (rotated.length) await this.app.reloadPages();
     }
-    toast(done ? `${done}페이지에서 낱말 ${words}개를 인식했습니다. 이제 찾기(Ctrl+F)로 검색됩니다.` : '인식할 페이지가 없었습니다 (이미 글자가 있는 페이지는 건너뜁니다).', 5000);
+    toast(done ? `${done}페이지에서 낱말 ${words}개를 인식했습니다.${rotated.length ? ` ${rotated.length}페이지는 바로 세웠습니다.` : ''} 이제 찾기(Ctrl+F)로 검색됩니다.` : '인식할 페이지가 없었습니다 (이미 글자가 있는 페이지는 건너뜁니다).', 5000);
   }
   private async setPassword() {
     const a = h('input', { class: 'field', type: 'password', autocomplete: 'new-password', 'aria-label': '새 암호' });

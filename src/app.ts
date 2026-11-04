@@ -95,7 +95,11 @@ export class App {
     platform.onExternalOpen(b => this.handleBatch(b));
     platform.onCloseRequest(async () => {
       const dirty = this.tabs.filter(t => t.dirty);
-      return !dirty.length || await confirmBox('저장하지 않은 변경 사항', `${dirty.map(t => '“' + t.name + '”').join(', ')}에 저장하지 않은 편집 내용이 있습니다. 저장하지 않고 닫을까요?`, '저장하지 않고 닫기', true);
+      if (!dirty.length) return true;
+      const r = await this.askUnsaved(dirty);
+      if (r === 'cancel') return false;
+      if (r === 'save') { for (const t of dirty) if (!(await this.saveTab(t, false))) return false; }
+      return true;
     });
     this.updateStatus();
     if (platform.checkUpdate && this.prefs.autoUpdate !== false) setTimeout(() => this.checkUpdate(false), 4000);
@@ -119,6 +123,7 @@ export class App {
       if (b.mode === 'merge') return files.length > 1 ? m.mergeFiles(this, files) : this.openFiles(files);
       if (b.mode === 'split') return m.splitPdf(this, files);
       if (b.mode === 'to-images') return m.pdfsToImages(this, files);
+      if (b.mode === 'batch') return m.batchProcess(this, files.filter(f => /\.pdf$/i.test(f.name)));
       if (b.mode === 'to-pdf') {
         const imgs = files.filter(f => !/\.pdf$/i.test(f.name)).map(f => new File([f.bytes as BlobPart], f.name));
         return imgs.length ? m.imagesToPdf(this, imgs) : this.openFiles(files);
@@ -398,7 +403,11 @@ export class App {
   }
   async closeTab(tab: DocState | null = this.doc) {
     if (!tab) return;
-    if (tab.dirty && !(await confirmBox('저장하지 않은 변경 사항', `“${tab.name}”의 편집 내용을 저장하지 않고 닫을까요?`, '닫기', true))) return;
+    if (tab.dirty) {
+      const r = await this.askUnsaved([tab]);
+      if (r === 'cancel') return;
+      if (r === 'save' && !(await this.saveTab(tab, false))) return;
+    }
     const i = this.tabs.indexOf(tab);
     this.tabs.splice(i, 1);
     this.engine.call('close', [tab.id]);
@@ -442,10 +451,22 @@ export class App {
     }
     bar.append(h('button', { class: 'tab-add', type: 'button', title: '다른 PDF 열기 (Ctrl+O)', 'aria-label': '열기', onclick: () => this.pickAndOpen() }, icon('plus')));
   }
-  async save(as: boolean) {
-    const d = this.doc; if (!d) return;
-    if (!as && !d.dirty && d.target) { toast('바뀐 내용이 없습니다.'); return; }
-    this.editor?.commitPending();
+  /** 저장하지 않은 문서를 닫을 때: 저장하고 닫기 / 저장하지 않고 닫기 / 취소 */
+  private async askUnsaved(tabs: DocState[]): Promise<'save' | 'discard' | 'cancel'> {
+    const many = tabs.length > 1;
+    const body = many ? h('div', { class: 'form' }, h('p', {}, '다음 문서에 저장하지 않은 편집 내용이 있습니다.'), h('ul', { class: 'unsaved-list' }, ...tabs.map(t => h('li', {}, t.name))))
+      : `“${tabs[0].name}”에 저장하지 않은 편집 내용이 있습니다. 저장할까요?`;
+    const r = await dialog({ title: '저장하지 않은 변경 사항', body, buttons: [
+      { label: '취소', value: 'cancel' as const, left: true },
+      { label: '저장하지 않고 닫기', value: 'discard' as const, danger: true },
+      { label: many ? '모두 저장하고 닫기' : '저장하고 닫기', value: 'save' as const, primary: true }] });
+    return r?.value || 'cancel';
+  }
+  async save(as: boolean) { const d = this.doc; if (d) await this.saveTab(d, as); }
+  /** 탭 하나 저장 (지금 보고 있지 않은 탭도). 저장했으면 true */
+  async saveTab(d: DocState, as: boolean): Promise<boolean> {
+    if (!as && !d.dirty && d.target) { toast('바뀐 내용이 없습니다.'); return true; }
+    if (d === this.doc) await this.editor?.commitPending();
     const b = busy('저장하는 중…');
     try {
       const bytes = await this.engine.call<Uint8Array>('save', [d.id]);
@@ -455,14 +476,15 @@ export class App {
       if (!ok) {
         const suggest = as || !d.target ? d.name.replace(/\.pdf$/i, '') + (d.target ? '' : '_편집') + '.pdf' : d.name;
         const t = await this.platform.saveAs(suggest, bytes);
-        if (!t) return;
+        if (!t) return false;
         d.target = t; d.name = t.name;
         if (t.path) this.platform.addRecent(t.path);
       }
       d.dirty = false; d.size = bytes.length;
       this.updateTitle(); this.updateStatus(); this.renderTabs();
       toast(`저장했습니다 · ${d.name} (${fmtSize(bytes.length)})`);
-    } catch (e: any) { b.done(); toast('저장하지 못했습니다: ' + e.message); }
+      return true;
+    } catch (e: any) { b.done(); toast('저장하지 못했습니다: ' + e.message); return false; }
   }
   markDirty() { if (this.doc && !this.doc.dirty) { this.doc.dirty = true; this.updateTitle(); this.renderTabs(); } this.updateStatus(); }
   updateTitle() {
@@ -631,7 +653,8 @@ export class App {
       { label: '페이지를 이미지로 내보내기…', icon: 'extract', action: () => import('./tools.ts').then(m => m.exportImages(this)), disabled: !this.doc },
       { label: 'PDF 용량 줄이기…', icon: 'compress', action: () => import('./tools.ts').then(m => m.compressPdf(this)), disabled: !this.doc },
       { label: 'PDF 나누기…', icon: 'split', hint: this.shortcuts.label('split'), action: () => import('./tools.ts').then(m => m.splitPdf(this)), disabled: !this.doc },
-      { label: 'PDF 여러 개 합치기…', icon: 'merge', action: () => import('./tools.ts').then(m => m.mergeFiles(this)) }, '-',
+      { label: 'PDF 여러 개 합치기…', icon: 'merge', action: () => import('./tools.ts').then(m => m.mergeFiles(this)) },
+      { label: '여러 파일 한꺼번에 처리…', icon: 'layers', hint: this.shortcuts.label('batch'), action: () => import('./tools.ts').then(m => m.batchProcess(this)) }, '-',
       { label: '문서 닫기', icon: 'close', hint: 'Ctrl+W', action: () => this.closeDoc(), disabled: !this.doc }, '-',
       { label: '두 페이지씩 보기', icon: 'spread', action: () => { this.prefs.spread = !this.prefs.spread; this.savePrefs(); this.view.setSpread(this.prefs.spread); }, checked: this.prefs.spread },
       { label: '야간 보기 (색 반전)', icon: 'moon', action: () => { this.prefs.night = !this.prefs.night; this.savePrefs(); this.view.setNight(this.prefs.night); }, checked: this.prefs.night },
@@ -730,6 +753,7 @@ export class App {
       { id: 'print', group: '파일', label: '인쇄', keys: ['Ctrl+P'], run: () => this.print(), when: doc, allowTyping: true },
       { id: 'compress', group: '파일', label: 'PDF 용량 줄이기', keys: ['Ctrl+Shift+M'], run: () => tools((m: any) => m.compressPdf(this)), when: doc },
       { id: 'split', group: '파일', label: 'PDF 나누기', keys: ['Ctrl+Shift+D'], run: () => tools((m: any) => m.splitPdf(this)), when: doc },
+      { id: 'batch', group: '파일', label: '여러 파일 한꺼번에 처리 (보정·OCR·용량)', keys: ['Ctrl+Alt+B'], run: () => tools((m: any) => m.batchProcess(this)) },
       { id: 'img2pdf', group: '파일', label: '이미지로 PDF 만들기', keys: ['Ctrl+Shift+I'], run: () => tools((m: any) => m.imagesToPdf(this)) },
       { id: 'pdf2img', group: '파일', label: '페이지를 이미지로 내보내기', keys: ['Ctrl+Shift+E'], run: () => tools((m: any) => m.exportImages(this)), when: doc },
       { id: 'info', group: '파일', label: '문서 정보', keys: ['Ctrl+D'], run: () => this.docInfo(), when: doc },

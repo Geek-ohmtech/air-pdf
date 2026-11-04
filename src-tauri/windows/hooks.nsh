@@ -19,6 +19,7 @@
   !insertmacro AIRPDF_VERB "$0" "2merge" "PDF 합치기" "--merge"
   !insertmacro AIRPDF_VERB "$0" "3split" "PDF 나누기 (분할)" "--split"
   !insertmacro AIRPDF_VERB "$0" "4images" "PDF → 이미지" "--to-images"
+  !insertmacro AIRPDF_VERB "$0" "5batch" "한꺼번에 처리 (보정·OCR·용량)" "--batch"
 
   ; 그림 파일 메뉴
   StrCpy $0 "Software\Classes\SystemFileAssociations\image\shell\AirPDF.ToPdf"

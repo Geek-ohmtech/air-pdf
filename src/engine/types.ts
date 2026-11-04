@@ -17,4 +17,4 @@ export interface TextRun {
   bold: boolean; italic: boolean; embedded: boolean; invisible: boolean; origin: { x: number; y: number }; angle: number;
   inForm?: boolean;
 }
-export interface PageObjInfo { h: number; type: 'image' | 'path' | 'form' | 'shape' | 'free' | 'textbox'; rect: Rect; inForm?: boolean; meta?: any; objs?: number[]; /** 원본 선·도형: 칠·선이 보이는지, 흰색으로만 칠했는지(눌러서 고르지 않음) */ vis?: { fill: boolean; stroke: boolean; ghost: boolean } }
+export interface PageObjInfo { h: number; type: 'image' | 'path' | 'form' | 'shape' | 'free' | 'textbox'; rect: Rect; inForm?: boolean; meta?: any; objs?: number[]; /** 원본 선·도형: 칠·선이 보이는지, 흰색으로만 칠했는지(눌러서 고르지 않음) */ vis?: { fill: boolean; stroke: boolean; ghost: boolean }; /** 페이지를 거의 다 덮는 그림 (스캔 페이지 바탕) */ bg?: boolean }

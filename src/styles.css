@@ -566,3 +566,14 @@ body.drop-in-thumbs .dropzone { display: none; }
 .wc.close:active { background: #b22a1b; color: #fff; }
 .wc-ico { display: inline-flex; }
 @media (max-width: 720px) { .win-title { display: none; } }
+.unsaved-list { margin: 0; padding-left: 20px; font-size: 13.5px; line-height: 1.7; }
+.scan-note { font-size: 12px; color: var(--accent); }
+.ed .run-hint.ocr { stroke: #0e7a8a; stroke-dasharray: 2 2; }
+.ed-text.ocr { background: #fff; color: #111 !important; border-color: #0e7a8a; }
+.batch-files { border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+.batch-list { list-style: none; margin: 0; padding: 4px; max-height: 180px; overflow: auto; display: grid; gap: 2px; }
+.batch-list li { display: flex; align-items: center; gap: 6px; padding: 3px 6px; border-radius: 6px; }
+.batch-list li:hover { background: var(--panel-2); }
+.batch-files-bar { display: flex; align-items: center; justify-content: space-between; padding: 6px 8px; border-top: 1px solid var(--line); background: var(--panel-2); }
+.batch-files-bar .btn { display: inline-flex; align-items: center; gap: 4px; }
+.suggest .chk .field.sm { margin-left: auto; width: auto; padding: 2px 6px; height: 28px; align-self: center; }

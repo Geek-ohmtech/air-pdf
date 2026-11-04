@@ -1,6 +1,6 @@
 export interface OpenedFile { name: string; bytes: Uint8Array; path?: string; handle?: any }
 export interface SavedTarget { name: string; path?: string; handle?: any }
-export type BatchMode = 'merge' | 'split' | 'to-images' | 'to-pdf';
+export type BatchMode = 'merge' | 'split' | 'to-images' | 'to-pdf' | 'batch';
 export interface Batch { mode: BatchMode | null; files: OpenedFile[] }
 export interface UpdateInfo { version: string; notes: string; install(progress: (done: number, total: number) => void): Promise<void> }
 export interface Platform {

@@ -283,7 +283,7 @@ fn parse_args<I: IntoIterator<Item = String>>(args: I) -> Batch {
     let mut b = Batch::default();
     for a in args {
         if let Some(m) = a.strip_prefix("--") {
-            if ["merge", "split", "to-images", "to-pdf"].contains(&m) {
+            if ["merge", "split", "to-images", "to-pdf", "batch"].contains(&m) {
                 b.mode = Some(m.to_owned());
             }
             continue;

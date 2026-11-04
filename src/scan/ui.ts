@@ -3,7 +3,7 @@ import { dialog, h, icon } from '../ui/dom.ts';
 import { detectQuad, process, toCanvas, type Mode, type Quad } from './scan.ts';
 
 export interface ScanSource { name: string; canvas: HTMLCanvasElement }
-interface Item extends ScanSource { quad: Quad; mode: Mode; turn: number; deskew: boolean; small?: HTMLCanvasElement }
+interface Item extends ScanSource { quad: Quad; mode: Mode; turn: number; deskew: boolean; clean: boolean; mark: boolean; oriented?: boolean; small?: HTMLCanvasElement }
 
 const MODES: [Mode, string, string][] = [
   ['color', '선명한 컬러', '종이를 하얗게, 그늘을 지우고 색은 살립니다'],
@@ -14,7 +14,7 @@ const MODES: [Mode, string, string][] = [
 
 /** 보정 화면을 띄우고, 적용하면 보정한 그림들을 돌려준다 (취소하면 null) */
 export async function scanDialog(srcs: ScanSource[], o: { title?: string; ok?: string } = {}): Promise<HTMLCanvasElement[] | null> {
-  const items: Item[] = srcs.map(s => ({ ...s, quad: detectQuad(s.canvas), mode: 'color', turn: 0, deskew: true }));
+  const items: Item[] = srcs.map(s => ({ ...s, quad: detectQuad(s.canvas), mode: 'color', turn: 0, deskew: true, clean: true, mark: true }));
   let cur = 0, sameForAll = true;
   const stage = h('div', { class: 'scan-stage' });
   const before = h('div', { class: 'scan-pane' }), after = h('div', { class: 'scan-pane' });
@@ -23,6 +23,10 @@ export async function scanDialog(srcs: ScanSource[], o: { title?: string; ok?: s
   const strip = h('div', { class: 'scan-strip' });
   const modeRow = h('div', { class: 'seg scan-modes', role: 'radiogroup', 'aria-label': '보정 방식' });
   const deskew = h('input', { type: 'checkbox', checked: '' }) as HTMLInputElement;
+  const orient = h('input', { type: 'checkbox', checked: '' }) as HTMLInputElement;
+  const clean = h('input', { type: 'checkbox', checked: '' }) as HTMLInputElement;
+  const mark = h('input', { type: 'checkbox', checked: '' }) as HTMLInputElement;
+  const orientNote = h('span', { class: 'scan-note' });
   const all = h('input', { type: 'checkbox', checked: '' }) as HTMLInputElement;
   let pt: { i: number } | null = null, timer = 0;
 
@@ -67,7 +71,7 @@ export async function scanDialog(srcs: ScanSource[], o: { title?: string; ok?: s
   const drawAfter = () => {
     const x = it(), sm = smallOf(x), k = sm.width / x.canvas.width;
     const q = x.quad.map(p => ({ x: p.x * k, y: p.y * k })) as Quad;
-    const out = process(sm, { quad: q, mode: x.mode, deskew: x.deskew, turn: x.turn });
+    const out = process(sm, { quad: q, mode: x.mode, deskew: x.deskew, turn: x.turn, clean: x.clean, mark: x.mark });
     prevImg.width = out.width; prevImg.height = out.height; prevImg.getContext('2d')!.drawImage(out, 0, 0);
   };
   const schedule = () => { clearTimeout(timer); timer = window.setTimeout(drawAfter, 120); };
@@ -86,9 +90,24 @@ export async function scanDialog(srcs: ScanSource[], o: { title?: string; ok?: s
   const go = (i: number) => {
     cur = Math.max(0, Math.min(items.length - 1, i));
     counter.textContent = items.length > 1 ? `${cur + 1} / ${items.length} · ${it().name}` : it().name;
-    deskew.checked = it().deskew;
+    deskew.checked = it().deskew; clean.checked = it().clean; mark.checked = it().mark;
+    if (orient.checked && !it().oriented) autoOrient(it());
     drawBefore(); drawModes(); drawStrip(); drawAfter();
   };
+  const autoOrient = async (x: Item) => {
+    x.oriented = true; orientNote.textContent = '방향 확인 중…';
+    try {
+      const { detectOrientation } = await import('../editor/ocr.ts');
+      const sm = smallOf(x), k = sm.width / x.canvas.width;
+      const flat = process(sm, { quad: x.quad.map(p => ({ x: p.x * k, y: p.y * k })) as Quad, mode: 'none', mark: false });
+      const deg = await detectOrientation(flat);
+      if (deg) { x.turn = deg; if (x === it()) schedule(); }
+      if (x === it()) orientNote.textContent = deg ? `${deg}° 돌려 세웠습니다` : '';
+    } catch { if (x === it()) orientNote.textContent = ''; }
+  };
+  orient.addEventListener('change', () => { if (orient.checked) for (const y of sameForAll ? items : [it()]) { y.oriented = false; } if (orient.checked) autoOrient(it()); else orientNote.textContent = ''; });
+  clean.addEventListener('change', () => { for (const y of sameForAll ? items : [it()]) y.clean = clean.checked; schedule(); });
+  mark.addEventListener('change', () => { for (const y of sameForAll ? items : [it()]) y.mark = mark.checked; schedule(); });
   deskew.addEventListener('change', () => { for (const y of sameForAll ? items : [it()]) y.deskew = deskew.checked; schedule(); });
   all.addEventListener('change', () => { sameForAll = all.checked; });
   after.append(h('div', { class: 'scan-cap' }, '결과 미리보기'), h('div', { class: 'scan-img out' }, prevImg));
@@ -97,14 +116,18 @@ export async function scanDialog(srcs: ScanSource[], o: { title?: string; ok?: s
     h('button', { class: 'btn sm', type: 'button', onclick: () => go(cur - 1) }, '‹ 이전'), counter, h('button', { class: 'btn sm', type: 'button', onclick: () => go(cur + 1) }, '다음 ›')) : counter;
   const body = h('div', { class: 'scan-body' }, stage,
     h('div', { class: 'scan-opts' }, h('span', { class: 'prop-lbl' }, '보정 방식'), modeRow,
-      h('label', { class: 'chk' }, deskew, ' 기울기 자동 바로잡기'),
+      h('label', { class: 'chk' }, deskew, ' 기울기 바로잡기'),
+      h('label', { class: 'chk', title: '옆으로 눕거나 거꾸로 된 페이지를 글자를 읽어 보고 바로 세웁니다' }, orient, ' 방향 자동 바로잡기'), orientNote,
+      h('label', { class: 'chk', title: '옅은 회색·분홍 바탕무늬(워터마크)를 흰 바탕으로 지우고 글자를 진하게' }, clean, ' 흐린 무늬 지우기'),
+      h('label', { class: 'chk', title: '아래쪽 구석의 "CamScanner로 스캔하기" 같은 스캔 앱 표시를 지웁니다' }, mark, ' 스캔 앱 표시 지우기'),
       items.length > 1 ? h('label', { class: 'chk' }, all, ' 모든 이미지에 같은 보정') : null),
     strip);
   go(0);
   const r = await dialog({ title: o.title || '문서 보정', cls: 'scan', head: nav, body, buttons: [{ label: '취소', value: false }, { label: o.ok || '보정 적용', value: true, primary: true }] });
   if (!r?.value) return null;
+  if (orient.checked) for (const x of items) if (!x.oriented) await autoOrient(x);
   // 실제 크기로 처리
-  return items.map(x => process(x.canvas, { quad: x.quad, mode: x.mode, deskew: x.deskew, turn: x.turn }));
+  return items.map(x => process(x.canvas, { quad: x.quad, mode: x.mode, deskew: x.deskew, turn: x.turn, clean: x.clean, mark: x.mark }));
 }
 
 /** 파일 → 보정용 캔버스 (사진 방향(EXIF)은 브라우저가 맞춰 준다) */

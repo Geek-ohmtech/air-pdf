@@ -50,19 +50,31 @@ export function detectQuad(c: HTMLCanvasElement): Quad {
   const g = boxBlur(grayOf(sg.getImageData(0, 0, sw, sh).data, sw * sh), sw, sh, 1);
   const th = otsu(g);
   const mask = new Uint8Array(sw * sh); for (let i = 0; i < g.length; i++) mask[i] = g[i] > th ? 1 : 0;
-  // 가장 큰 밝은 덩어리
+  // 종이 밖 = 그림 가장자리에서 이어진 어두운 곳. 나머지(글자·표 테두리 포함)는 모두 종이로 본다
+  // (밝은 덩어리만 찾으면 굵은 표 테두리 안쪽만 종이로 잘못 잡는다)
+  const bgm = new Uint8Array(sw * sh); const stack: number[] = [];
+  const push = (p: number) => { if (!mask[p] && !bgm[p]) { bgm[p] = 1; stack.push(p); } };
+  for (let x = 0; x < sw; x++) { push(x); push((sh - 1) * sw + x); }
+  for (let y = 0; y < sh; y++) { push(y * sw); push(y * sw + sw - 1); }
+  let bgN = 0;
+  while (stack.length) {
+    const p = stack.pop()!; bgN++;
+    const x = p % sw, y = (p / sw) | 0;
+    if (x > 0) push(p - 1); if (x < sw - 1) push(p + 1); if (y > 0) push(p - sw); if (y < sh - 1) push(p + sw);
+  }
+  if (bgN < sw * sh * 0.03) return full; // 종이가 그림을 거의 다 채움 (이미 잘린 스캔)
+  // 종이 영역에서 가장 큰 덩어리 (잡티 빼기)
   const lab = new Int32Array(sw * sh); let best = 0, bestN = 0, id = 0;
-  const stack: number[] = [];
-  for (let i = 0; i < mask.length; i++) {
-    if (!mask[i] || lab[i]) continue;
+  for (let i = 0; i < bgm.length; i++) {
+    if (bgm[i] || lab[i]) continue;
     id++; let n = 0; stack.push(i); lab[i] = id;
     while (stack.length) {
       const p = stack.pop()!; n++;
       const x = p % sw, y = (p / sw) | 0;
-      if (x > 0 && mask[p - 1] && !lab[p - 1]) { lab[p - 1] = id; stack.push(p - 1); }
-      if (x < sw - 1 && mask[p + 1] && !lab[p + 1]) { lab[p + 1] = id; stack.push(p + 1); }
-      if (y > 0 && mask[p - sw] && !lab[p - sw]) { lab[p - sw] = id; stack.push(p - sw); }
-      if (y < sh - 1 && mask[p + sw] && !lab[p + sw]) { lab[p + sw] = id; stack.push(p + sw); }
+      if (x > 0 && !bgm[p - 1] && !lab[p - 1]) { lab[p - 1] = id; stack.push(p - 1); }
+      if (x < sw - 1 && !bgm[p + 1] && !lab[p + 1]) { lab[p + 1] = id; stack.push(p + 1); }
+      if (y > 0 && !bgm[p - sw] && !lab[p - sw]) { lab[p - sw] = id; stack.push(p - sw); }
+      if (y < sh - 1 && !bgm[p + sw] && !lab[p + sw]) { lab[p + sw] = id; stack.push(p + sw); }
     }
     if (n > bestN) { bestN = n; best = id; }
   }
@@ -177,7 +189,7 @@ export function unevenLight(c: HTMLCanvasElement) {
   return (hi - lo) / Math.max(1, mid) > 0.12 || mid < 200;
 }
 /** 조명 고르게 + 대비. 종이 바탕을 흰색으로, 그림자를 지운다 */
-export function enhance(c: HTMLCanvasElement, mode: Mode) {
+export function enhance(c: HTMLCanvasElement, mode: Mode, clean = true) {
   if (mode === 'none') return c;
   const W = c.width, H = c.height;
   const ctx = c.getContext('2d', { willReadFrequently: true })!;
@@ -216,8 +228,11 @@ export function enhance(c: HTMLCanvasElement, mode: Mode) {
   // 대비: 어두운 페이지 1%를 검정으로, 바탕을 흰색으로
   const hist = new Uint32Array(256); for (const v of out) hist[v | 0]++;
   let lo = 0, acc = 0; while (lo < 200 && (acc += hist[lo]) < n * 0.01) lo++;
-  const hi = 236, span = Math.max(30, hi - lo);
-  const curve = (v: number) => { const t = Math.max(0, Math.min(1, (v - lo) / span)); return 255 * Math.pow(t, 1.15); };
+  // 흐린 무늬 지우기(clean): 바탕 쪽 문턱을 낮춰 옅은 회색·분홍 워터마크가 흰 바탕이 되게, 글자는 더 진하게
+  const hi = clean ? 210 : 236, span = Math.max(30, hi - lo), gam = clean ? 1.3 : 1.15;
+  const curve = (v: number) => { const t = Math.max(0, Math.min(1, (v - lo) / span)); return 255 * Math.pow(t, gam); };
+  // 글자 또렷하게 (언샤프 마스크)
+  if (mode !== 'bw') { const bl = boxBlur(out, W, H, 1); for (let i = 0; i < n; i++) out[i] = Math.max(0, Math.min(255, out[i] + (out[i] - bl[i]) * 0.7)); }
   if (mode === 'bw') {
     // 문턱값을 조금 낮춰 옅은 바탕무늬(워터마크)는 흰색으로, 남은 점은 지운다
     const th = Math.min(165, Math.max(105, otsu(out) - 6));
@@ -240,13 +255,67 @@ export function enhance(c: HTMLCanvasElement, mode: Mode) {
   return r;
 }
 
-export interface ScanOpts { quad?: Quad | null; mode: Mode; deskew?: boolean; turn?: number }
-/** 한 장 보정: 원근 → 90° 회전 → 기울기 → 조명·대비 */
+export interface ScanOpts { quad?: Quad | null; mode: Mode; deskew?: boolean; turn?: number; clean?: boolean; mark?: boolean }
+/** 한 장 보정: 원근 → 90° 회전 → 기울기 → 조명·대비 → 스캔 앱 표시 지우기 */
 export function process(src: HTMLCanvasElement, o: ScanOpts) {
   let c = o.quad && !isFull(o.quad, src.width, src.height) ? warp(src, o.quad) : src;
   if (o.turn) c = rotate(c, o.turn);
   if (o.deskew) { const a = detectSkew(c); if (Math.abs(a) >= 0.5) c = rotate(c, -a); }
-  return enhance(c === src ? copy(src) : c, o.mode);
+  c = enhance(c === src ? copy(src) : c, o.mode, o.clean !== false);
+  if (o.mark !== false) removeScanMark(c);
+  return c;
+}
+
+/**
+ * 스캔 앱이 아래쪽 구석에 찍는 표시("CamScanner로 스캔하기" 등) 지우기.
+ * 아래 7% 띠의 오른쪽(또는 왼쪽) 구석에, 다른 내용과 떨어진 작은 글자 덩어리가 있으면 바탕색으로 덮는다.
+ */
+export function removeScanMark(c: HTMLCanvasElement) {
+  const W = c.width, H = c.height, g = c.getContext('2d', { willReadFrequently: true })!;
+  const y0 = Math.floor(H * 0.93), bh = H - y0;
+  const d = g.getImageData(0, y0, W, bh).data;
+  const dark = (x: number, y: number) => { const j = (y * W + x) * 4; return d[j] * 0.299 + d[j + 1] * 0.587 + d[j + 2] * 0.114 < 150; };
+  // 열마다 어두운 점이 있는지 → 왼쪽부터 덩어리(글자 묶음) 나누기
+  const col = new Uint8Array(W);
+  for (let x = 0; x < W; x++) for (let y = 0; y < bh; y += 1) if (dark(x, y)) { col[x] = 1; break; }
+  const gapMin = Math.round(W * 0.03);
+  const blobs: [number, number][] = []; let st = -1, last = -1;
+  for (let x = 0; x < W; x++) { if (col[x]) { if (st < 0) st = x; else if (x - last > gapMin) { blobs.push([st, last]); st = x; } last = x; } }
+  if (st >= 0) blobs.push([st, last]);
+  let changed = false;
+  for (const [a, b] of blobs) {
+    // 오른쪽 아래 구석만 (왼쪽 아래는 진짜 꼬리말일 때가 많아 건드리지 않는다)
+    if (!(b > W * 0.88 && a > W * 0.55)) continue;
+    // 덩어리의 위아래
+    let top = bh, bot = -1;
+    for (let y = 0; y < bh; y++) for (let x = a; x <= b; x++) if (dark(x, y)) { if (y < top) top = y; if (y > bot) bot = y; break; }
+    if (bot < 0 || bot - top > H * 0.03) continue; // 한 줄 높이의 작은 글자만
+    // 바탕색: 덩어리 둘레의 밝은 점 평균
+    let r = 0, gg = 0, bb = 0, cnt = 0;
+    for (let y = Math.max(0, top - 6); y <= Math.min(bh - 1, bot + 6); y += 2) for (const x of [Math.max(0, a - 8), Math.min(W - 1, b + 8)]) { const j = (y * W + x) * 4; r += d[j]; gg += d[j + 1]; bb += d[j + 2]; cnt++; }
+    g.fillStyle = cnt ? `rgb(${r / cnt | 0},${gg / cnt | 0},${bb / cnt | 0})` : '#fff';
+    g.fillRect(a - 6, y0 + top - 6, b - a + 12, bot - top + 12);
+    changed = true;
+  }
+  return changed;
+}
+
+/** 글줄이 세로로 서 있는가 (90°·270° 돌아간 페이지): true/false, 애매하면 null. 표 선 같은 긴 줄은 빼고 글자만 본다 */
+export function looksSideways(c: HTMLCanvasElement): boolean | null {
+  const k = 700 / Math.max(c.width, c.height), w = Math.max(8, Math.round(c.width * k)), h = Math.max(8, Math.round(c.height * k));
+  const s = document.createElement('canvas'); s.width = w; s.height = h;
+  const g = s.getContext('2d', { willReadFrequently: true })!; g.drawImage(c, 0, 0, w, h);
+  const gray = grayOf(g.getImageData(0, 0, w, h).data, w * h), bg = boxBlur(gray, w, h, 12);
+  const m = new Uint8Array(w * h); for (let i = 0; i < m.length; i++) m[i] = gray[i] < bg[i] * 0.8 ? 1 : 0;
+  // 긴 가로줄·세로줄(표 선) 지우기
+  const lim = Math.round(Math.min(w, h) * 0.06);
+  for (let y = 0; y < h; y++) { let st = -1; for (let x = 0; x <= w; x++) { const on = x < w && m[y * w + x]; if (on && st < 0) st = x; if (!on && st >= 0) { if (x - st > lim) for (let i = st; i < x; i++) m[y * w + i] = 2; st = -1; } } }
+  for (let x = 0; x < w; x++) { let st = -1; for (let y = 0; y <= h; y++) { const on = y < h && m[y * w + x] === 1; if (on && st < 0) st = y; if (!on && st >= 0) { if (y - st > lim) for (let i = st; i < y; i++) m[i * w + x] = 2; st = -1; } } }
+  const rows = new Float64Array(h), cols = new Float64Array(w);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) if (m[y * w + x] === 1) { rows[y]++; cols[x]++; }
+  const sharp = (a: Float64Array) => { let v = 0; for (let i = 1; i < a.length; i++) v += (a[i] - a[i - 1]) ** 2; return v / a.length; };
+  const r = sharp(cols) / Math.max(1e-6, sharp(rows));
+  return r > 1.8 ? true : r < 0.6 ? false : null;
 }
 const copy = (c: HTMLCanvasElement) => { const r = document.createElement('canvas'); r.width = c.width; r.height = c.height; r.getContext('2d')!.drawImage(c, 0, 0); return r; };
 export async function toBlob(c: HTMLCanvasElement, mode: Mode): Promise<Blob> {

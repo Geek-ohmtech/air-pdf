@@ -135,7 +135,13 @@ export function toast(msg: string, ms = 2800, action?: { label: string; run: () 
 export function busy(msg: string) {
   const el = h('div', { class: 'busy' }, h('div', { class: 'busy-card' }, h('span', { class: 'spin' }), h('span', { class: 'busy-msg' }, msg)));
   document.body.append(el);
-  return { set: (m: string) => { if (!el.isConnected) document.body.append(el); (el.querySelector('.busy-msg') as HTMLElement).textContent = m; }, done: () => el.remove() };
+  let closed = false;
+  // done() 뒤에는 set()이 와도 다시 나타나지 않는다 (다시 보이려면 show())
+  return {
+    set: (m: string) => { (el.querySelector('.busy-msg') as HTMLElement).textContent = m; },
+    show: (m?: string) => { closed = false; if (!el.isConnected) document.body.append(el); if (m) (el.querySelector('.busy-msg') as HTMLElement).textContent = m; },
+    done: () => { closed = true; el.remove(); void closed; },
+  };
 }
 
 /** 모달 대화상자. 버튼을 누르면 값과 함께 닫힌다 */
