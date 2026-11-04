@@ -14,6 +14,26 @@ export function toCanvas(src: CanvasImageSource & { width: number; height: numbe
   const g = c.getContext('2d', { willReadFrequently: true })!; g.imageSmoothingQuality = 'high'; g.drawImage(src, 0, 0, c.width, c.height);
   return c;
 }
+/** 작은 그림(낮은 해상도 스캔)은 보정 전에 키운다: 글자를 또렷하게 다듬을 여유가 생긴다 */
+export function upscale(c: HTMLCanvasElement, minLong = 2200) {
+  const m = Math.max(c.width, c.height); if (m >= minLong) return c;
+  const k = Math.min(4, minLong / m), r = document.createElement('canvas');
+  r.width = Math.round(c.width * k); r.height = Math.round(c.height * k);
+  const g = r.getContext('2d')!; g.imageSmoothingEnabled = true; g.imageSmoothingQuality = 'high'; g.drawImage(c, 0, 0, r.width, r.height);
+  return r;
+}
+/** 거의 흑백인 문서인가 (색이 거의 없으면 회색조 보정이 더 깨끗하다) */
+export function mostlyGray(c: HTMLCanvasElement) {
+  const k = 200 / Math.max(c.width, c.height), w = Math.max(4, Math.round(c.width * k)), h = Math.max(4, Math.round(c.height * k));
+  const s = document.createElement('canvas'); s.width = w; s.height = h;
+  const g = s.getContext('2d', { willReadFrequently: true })!; g.drawImage(c, 0, 0, w, h);
+  const d = g.getImageData(0, 0, w, h).data; let colored = 0, n = 0;
+  for (let i = 0; i < d.length; i += 4) {
+    const mx = Math.max(d[i], d[i + 1], d[i + 2]), mn = Math.min(d[i], d[i + 1], d[i + 2]);
+    if (mx < 235) { n++; if (mx - mn > 45) colored++; } // 바탕(밝은 곳)은 빼고, 글자·그림 쪽에서 색이 뚜렷한 점
+  }
+  return n === 0 || colored / n < 0.06;
+}
 const grayOf = (d: Uint8ClampedArray, n: number) => { const g = new Float32Array(n); for (let i = 0, j = 0; i < n; i++, j += 4) g[i] = d[j] * 0.299 + d[j + 1] * 0.587 + d[j + 2] * 0.114; return g; };
 
 /** 오츠 문턱값 */
@@ -211,10 +231,22 @@ export function enhance(c: HTMLCanvasElement, mode: Mode, clean = true) {
     return Math.max(30, (bg[y0 * sw + x0] * (1 - ax) + bg[y0 * sw + x0 + 1] * ax) * (1 - ay) + (bg[(y0 + 1) * sw + x0] * (1 - ax) + bg[(y0 + 1) * sw + x0 + 1] * ax) * ay);
   };
   const out = new Float32Array(n);
+  // 워터마크: 바탕보다 조금 어둡고 색이 살짝 도는(분홍·회분홍) 점은 바탕으로 본다.
+  // 글자(검정)는 색이 없고, 도장·서명은 훨씬 어둡거나 색이 진해서 남는다
+  const bgR = new Float32Array(3); let bgN = 0;
+  for (let i = 0; i < n; i += 13) { const j = i * 4, v = d[j] * 0.299 + d[j + 1] * 0.587 + d[j + 2] * 0.114; if (v > 200) { bgR[0] += d[j]; bgR[1] += d[j + 1]; bgR[2] += d[j + 2]; bgN++; } }
+  const paperTint = bgN ? [bgR[0] / bgN, bgR[1] / bgN, bgR[2] / bgN] : [255, 255, 255];
   for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
     const i = y * W + x, j = i * 4, b = bgAt(x, y);
-    out[i] = Math.min(255, (d[j] * 0.299 + d[j + 1] * 0.587 + d[j + 2] * 0.114) / b * 255);
-    if (mode === 'color') { const k = 255 / b; d[j] = Math.min(255, d[j] * k); d[j + 1] = Math.min(255, d[j + 1] * k); d[j + 2] = Math.min(255, d[j + 2] * k); }
+    let v = Math.min(255, (d[j] * 0.299 + d[j + 1] * 0.587 + d[j + 2] * 0.114) / b * 255);
+    if (clean && v > 120 && v < 235) {
+      // 종이 색을 뺀 뒤에 남는 색 (종이가 누렇거나 푸른 것은 색으로 치지 않는다)
+      const r = d[j] / paperTint[0], g = d[j + 1] / paperTint[1], bl = d[j + 2] / paperTint[2];
+      const chroma = (Math.max(r, g, bl) - Math.min(r, g, bl)) * 255;
+      if (chroma > 9 && chroma < 70 && v > 140) v = 255;
+    }
+    out[i] = v;
+    if (mode === 'color') { const k = 255 / b; d[j] = Math.min(255, d[j] * k); d[j + 1] = Math.min(255, d[j + 1] * k); d[j + 2] = Math.min(255, d[j + 2] * k); if (v === 255) { d[j] = d[j + 1] = d[j + 2] = 255; } }
   }
   // 컬러: 종이 색이 흰색이 되게 (노란 조명·파란 그늘 바로잡기)
   if (mode === 'color') {
@@ -229,7 +261,8 @@ export function enhance(c: HTMLCanvasElement, mode: Mode, clean = true) {
   const hist = new Uint32Array(256); for (const v of out) hist[v | 0]++;
   let lo = 0, acc = 0; while (lo < 200 && (acc += hist[lo]) < n * 0.01) lo++;
   // 흐린 무늬 지우기(clean): 바탕 쪽 문턱을 낮춰 옅은 회색·분홍 워터마크가 흰 바탕이 되게, 글자는 더 진하게
-  const hi = clean ? 210 : 236, span = Math.max(30, hi - lo), gam = clean ? 1.3 : 1.15;
+  // 바탕으로 칠할 문턱: 글자가 얼마나 진한지(lo)에 맞춘다. 진한 글자 문서는 옅은 무늬를 더 많이 지운다
+  const hi = clean ? Math.max(172, Math.min(212, lo + (255 - lo) * 0.62)) : 236, span = Math.max(30, hi - lo), gam = clean ? 1.3 : 1.15;
   const curve = (v: number) => { const t = Math.max(0, Math.min(1, (v - lo) / span)); return 255 * Math.pow(t, gam); };
   // 글자 또렷하게 (언샤프 마스크)
   if (mode !== 'bw') { const bl = boxBlur(out, W, H, 1); for (let i = 0; i < n; i++) out[i] = Math.max(0, Math.min(255, out[i] + (out[i] - bl[i]) * 0.7)); }

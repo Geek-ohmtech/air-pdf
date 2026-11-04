@@ -1,6 +1,6 @@
 /** 문서 보정 화면: 모서리 맞추기 · 회전 · 보정 방식 선택 · 미리보기 */
 import { dialog, h, icon } from '../ui/dom.ts';
-import { detectQuad, process, toCanvas, type Mode, type Quad } from './scan.ts';
+import { detectQuad, mostlyGray, process, toCanvas, upscale, type Mode, type Quad } from './scan.ts';
 
 export interface ScanSource { name: string; canvas: HTMLCanvasElement }
 interface Item extends ScanSource { quad: Quad; mode: Mode; turn: number; deskew: boolean; clean: boolean; mark: boolean; oriented?: boolean; small?: HTMLCanvasElement }
@@ -14,7 +14,8 @@ const MODES: [Mode, string, string][] = [
 
 /** 보정 화면을 띄우고, 적용하면 보정한 그림들을 돌려준다 (취소하면 null) */
 export async function scanDialog(srcs: ScanSource[], o: { title?: string; ok?: string } = {}): Promise<HTMLCanvasElement[] | null> {
-  const items: Item[] = srcs.map(s => ({ ...s, quad: detectQuad(s.canvas), mode: 'color', turn: 0, deskew: true, clean: true, mark: true }));
+  // 작은 그림은 키워서 보정하고, 색이 거의 없는 문서는 회색조로 시작한다
+  const items: Item[] = srcs.map(s0 => { const s = { ...s0, canvas: upscale(s0.canvas) }; return { ...s, quad: detectQuad(s.canvas), mode: mostlyGray(s.canvas) ? 'gray' : 'color', turn: 0, deskew: true, clean: true, mark: true }; });
   let cur = 0, sameForAll = true;
   const stage = h('div', { class: 'scan-stage' });
   const before = h('div', { class: 'scan-pane' }), after = h('div', { class: 'scan-pane' });

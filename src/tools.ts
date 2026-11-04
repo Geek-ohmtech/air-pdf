@@ -379,7 +379,7 @@ export async function batchProcess(app: App, src?: OpenedFile[]) {
   const addBtn = h('button', { class: 'btn sm', type: 'button', onclick: async () => { const more = await app.platform.pickPdfs(true); for (const f of more) if (!list.some(x => x.path && x.path === f.path)) list.push(f); draw(); } }, icon('open'), 'PDF 추가…');
   const cb = (on: boolean) => h('input', { type: 'checkbox', checked: on ? '' : undefined }) as HTMLInputElement;
   const oCorrect = cb(true), oOrient = cb(true), oOcr = cb(true), oCompress = cb(false);
-  const mode = h('select', { class: 'field sm' }, h('option', { value: 'color' }, '선명한 컬러'), h('option', { value: 'gray' }, '회색조'), h('option', { value: 'bw' }, '흑백 문서'));
+  const mode = h('select', { class: 'field sm' }, h('option', { value: 'auto' }, '자동 (흑백 문서는 회색조)'), h('option', { value: 'color' }, '선명한 컬러'), h('option', { value: 'gray' }, '회색조'), h('option', { value: 'bw' }, '흑백 문서'));
   const level = h('select', { class: 'field sm' }, h('option', { value: '96,0.6' }, '많이'), h('option', { value: '150,0.72', selected: '' }, '보통'), h('option', { value: '220,0.82' }, '조금'));
   const P = app.platform, canFolder = !!(P.pickFolder && P.writeInFolder);
   const where = h('select', { class: 'field' }, ...(canFolder ? [h('option', { value: 'beside' }, '원본 옆에 (이름_처리.pdf)'), h('option', { value: 'folder' }, '폴더를 골라서')] : [h('option', { value: 'zip' }, 'ZIP 파일 하나로')]));
@@ -396,7 +396,7 @@ export async function batchProcess(app: App, src?: OpenedFile[]) {
     h('p', { class: 'hint' }, '원본 파일은 바꾸지 않습니다. 글자로 된 페이지는 보정하지 않고 그대로 둡니다.')),
     buttons: [{ label: '취소', value: false }, { label: '시작', value: true, primary: true }] });
   if (!r?.value || !list.length) return;
-  const opts = { correct: oCorrect.checked, orient: oOrient.checked, ocr: oOcr.checked, compress: oCompress.checked, mode: mode.value as 'color' | 'gray' | 'bw', level: level.value.split(',').map(Number), where: where.value };
+  const opts = { correct: oCorrect.checked, orient: oOrient.checked, ocr: oOcr.checked, compress: oCompress.checked, mode: mode.value as 'auto' | 'color' | 'gray' | 'bw', level: level.value.split(',').map(Number), where: where.value };
   if (!opts.correct && !opts.orient && !opts.ocr && !opts.compress) { toast('할 일을 하나 이상 고르세요.'); return; }
   let dir: string | null = null;
   if (opts.where === 'folder') { dir = await P.pickFolder!(); if (!dir) return; }
@@ -426,7 +426,9 @@ export async function batchProcess(app: App, src?: OpenedFile[]) {
           if (opts.orient && c) { b.set(`${pg} 방향 확인 중…`); deg = await ocr.detectOrientation(c); }
           if (opts.correct && raw && c) {
             b.set(`${pg} 보정 중…`);
-            const out = sc.process(c, { quad: sc.detectQuad(c), mode: opts.mode, deskew: true, turn: deg, clean: true, mark: true });
+            const big = sc.upscale(c);
+            const m = opts.mode === 'auto' ? (sc.mostlyGray(big) ? 'gray' : 'color') : opts.mode;
+            const out = sc.process(big, { quad: sc.detectQuad(big), mode: m, deskew: true, turn: deg, clean: true, mark: true });
             const bytes = new Uint8Array(await (await sc.toBlob(out, 'color')).arrayBuffer());
             await app.engine.call('replaceWithImage', [id, key, { bytes, kind: 'jpg', iw: out.width, ih: out.height }]);
           } else if (deg) await app.engine.call('rotatePage', [id, key, deg / 90]);

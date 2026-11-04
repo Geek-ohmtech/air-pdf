@@ -847,8 +847,9 @@ export class Editor {
       try {
         if (run.invisible) {
           // 스캔 글자: 그 자리 그림에서 종이색·글자색을 읽어 덮고 새로 쓴다
-          const col = await this.sampleColors(page, run.rect);
-          const ch = await this.E.call<ObjChange>('editOcrRun', [this.doc.id, key, run.objs, text, { bg: col.bg, color: col.fg, font: this.props.font }]);
+          // 그 자리 그림에서 글자 높이·굵기·명조/고딕을 읽어 최대한 비슷하게
+          const st = await this.sampleColors(page, run.rect, run.text);
+          const ch = await this.E.call<ObjChange>('editOcrRun', [this.doc.id, key, run.objs, text, { bg: st.bg, color: st.fg, font: st.serif ? 'nanum-myeongjo' : 'noto-sans', ink: st.ink, bold: st.bold, oldText: run.text }]);
           this.objEntry(text ? '스캔 글자 수정' : '스캔 글자 삭제', ch);
           return;
         }
@@ -861,22 +862,44 @@ export class Editor {
     this.bindEditorKeys(ta, commit);
     this.editing = { ta, commit, kind: 'run', at: { page, x: run.rect.x + Math.min(4, run.rect.w / 2), y: run.rect.y + run.rect.h / 2 } };
   }
-  /** 페이지 그림에서 그 자리의 종이색(밝은 쪽)과 글자색(어두운 쪽)을 읽는다 */
-  private async sampleColors(page: number, r: Rect): Promise<{ bg: string; fg: string }> {
-    const k = 3, pad = 2;
-    const region = { x: Math.max(0, (r.x - pad) * k), y: Math.max(0, (r.y - pad) * k), w: (r.w + pad * 2) * k, h: (r.h + pad * 2) * k };
+  /**
+   * 페이지 그림에서 그 자리 글자의 모양을 읽는다: 종이색·글자색, 글자가 실제로 찍힌 범위(ink, pt),
+   * 굵기(획이 빽빽한가), 명조인가(세로 획이 가로 획보다 훨씬 굵은가)
+   */
+  private async sampleColors(page: number, r: Rect, text = ''): Promise<{ bg: string; fg: string; ink?: Rect; bold: boolean; serif: boolean }> {
+    const k = 4, pad = 2;
+    const ox = Math.max(0, r.x - pad), oy = Math.max(0, r.y - pad);
+    const region = { x: ox * k, y: oy * k, w: (r.w + pad * 2) * k, h: (r.h + pad * 2) * k };
     try {
       const res: any = await this.E.call('render', [this.doc.id, page, k, region, false, false]);
       const c = document.createElement('canvas'); c.width = res.width; c.height = res.height;
       const g = c.getContext('2d', { willReadFrequently: true })!;
       if (res.bitmap) { g.drawImage(res.bitmap, 0, 0); res.bitmap.close(); } else g.putImageData(new ImageData(res.data, res.width, res.height), 0, 0);
-      const d = g.getImageData(0, 0, c.width, c.height).data, px: [number, number, number, number][] = [];
-      for (let i = 0; i < d.length; i += 4) px.push([d[i] * 0.299 + d[i + 1] * 0.587 + d[i + 2] * 0.114, d[i], d[i + 1], d[i + 2]]);
-      px.sort((a, b) => a[0] - b[0]);
-      const avg = (a: typeof px) => '#' + [1, 2, 3].map(j => Math.round(a.reduce((s, p) => s + p[j], 0) / Math.max(1, a.length)).toString(16).padStart(2, '0')).join('');
-      const n = px.length;
-      return { bg: avg(px.slice(Math.floor(n * 0.6))), fg: avg(px.slice(0, Math.max(1, Math.floor(n * 0.06)))) };
-    } catch { return { bg: '#ffffff', fg: '#1a1a1a' }; }
+      const W = c.width, H = c.height, d = g.getImageData(0, 0, W, H).data, n = W * H;
+      const lum = new Float32Array(n); for (let i = 0; i < n; i++) lum[i] = d[i * 4] * 0.299 + d[i * 4 + 1] * 0.587 + d[i * 4 + 2] * 0.114;
+      const order = Array.from(lum.keys()).sort((a, b) => lum[a] - lum[b]);
+      const avg = (idx: number[]) => '#' + [0, 1, 2].map(ch => Math.round(idx.reduce((sum, i) => sum + d[i * 4 + ch], 0) / Math.max(1, idx.length)).toString(16).padStart(2, '0')).join('');
+      const bgIdx = order.slice(Math.floor(n * 0.6)), fgIdx = order.slice(0, Math.max(1, Math.floor(n * 0.06)));
+      const bgL = bgIdx.reduce((a, i) => a + lum[i], 0) / bgIdx.length, fgL = fgIdx.reduce((a, i) => a + lum[i], 0) / fgIdx.length;
+      const th = (bgL + fgL) / 2;
+      // 글자가 찍힌 범위
+      let x0 = W, y0 = H, x1 = -1, y1 = -1, dark = 0;
+      for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) if (lum[y * W + x] < th) { dark++; if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
+      if (x1 < 0 || bgL - fgL < 40) return { bg: avg(bgIdx), fg: avg(fgIdx), bold: false, serif: false };
+      // 획 굵기: 가로로 잰 검은 길이(=세로 획 굵기)와 세로로 잰 길이(=가로 획 굵기)
+      const runs = (horiz: boolean) => { const out: number[] = []; const A = horiz ? H : W, B = horiz ? W : H; for (let a = 0; a < A; a++) { let len = 0; for (let b = 0; b <= B; b++) { const on = b < B && lum[horiz ? a * W + b : b * W + a] < th; if (on) len++; else if (len) { out.push(len); len = 0; } } } out.sort((p, q) => p - q); return out.length ? out[out.length >> 1] : 0; };
+      const hRun = runs(true), vRun = runs(false);
+      const inkArea = (x1 - x0 + 1) * (y1 - y0 + 1);
+      // 굵기: 세로 획 굵기를 글자 높이에 견준 값 (보통 0.09~0.10, 굵게 0.12 넘음). 숫자·영문은 모양이 달라 문턱을 높인다
+      const stroke = hRun / (y1 - y0 + 1), hangul = [...text].filter(ch => /[가-힣]/.test(ch)).length >= [...text.replace(/\s/g, '')].length * 0.5;
+      void inkArea;
+      return {
+        bg: avg(bgIdx), fg: avg(fgIdx),
+        ink: { x: ox + x0 / k, y: oy + y0 / k, w: (x1 - x0 + 1) / k, h: (y1 - y0 + 1) / k },
+        bold: hangul ? stroke >= 0.115 : stroke >= 0.16,
+        serif: vRun > 0 && hRun / vRun > 1.55,
+      };
+    } catch { return { bg: '#ffffff', fg: '#1a1a1a', bold: false, serif: false }; }
   }
   private openNewTextEditor(page: number, x: number, y: number) {
     this.commitPending();

@@ -1291,7 +1291,10 @@ export class PdfEngine {
       const a2 = (b[2] - b[0]) * (b[3] - b[1]); if (a2 > area) { area = a2; best = o; }
     }
     if (!best || area < pc.w * pc.h * 0.6) return null;
-    const bm = this.P.FPDFImageObj_GetRenderedBitmap(d.doc, pc.page, best); if (!bm) return null;
+    // 회전·뒤집힘 없이 놓인 그림이면 원래 픽셀 그대로(GetBitmap), 아니면 놓인 모양대로(GetRenderedBitmap: 1pt=1px라 작다)
+    const m = this.objMatrix(best);
+    const plain = m[0] > 0 && m[3] > 0 && Math.abs(m[1]) < 1e-3 && Math.abs(m[2]) < 1e-3;
+    const bm = plain ? this.P.FPDFImageObj_GetBitmap(best) : this.P.FPDFImageObj_GetRenderedBitmap(d.doc, pc.page, best); if (!bm) return null;
     try {
       const w = this.P.FPDFBitmap_GetWidth(bm), h = this.P.FPDFBitmap_GetHeight(bm);
       if (w * h > 16_000_000 || w < 200 || h < 200) return null;
@@ -1614,7 +1617,7 @@ export class PdfEngine {
    * 스캔 글자 고치기: OCR 글자층(보이지 않는 글자)을 고치면, 그 자리의 그림 글자를 종이색으로 덮고
    * 새 글자를 보이게 쓴다. 빈 글로 고치면 그림 속 글자를 지운 것처럼 덮기만 한다.
    */
-  async editOcrRun(docId: number, key: number, objs: number[], newText: string, o: { bg: string; color: string; font?: string }): Promise<ObjChange> {
+  async editOcrRun(docId: number, key: number, objs: number[], newText: string, o: { bg: string; color: string; font?: string; ink?: Rect; bold?: boolean; oldText?: string }): Promise<ObjChange> {
     const d = this.D(docId); const pc = this.pageByKey(d, key); this.assertOwned(pc, objs);
     const also = this.liftObjs(d, pc, objs);
     let u = [Infinity, Infinity, -Infinity, -Infinity];
@@ -1626,22 +1629,48 @@ export class PdfEngine {
     for (const ob of objs) this.P.FPDFPage_RemoveObject(pc.page, ob);
     const added: { h: number; idx: number }[] = [];
     // 그림 글자 덮기 (조금 넉넉하게)
-    const pad = Math.max(0.6, r.h * 0.12);
-    const patch = this.addSegPath(pc, this.shapeSegs('rect', r.x - pad, r.y - pad, r.w + pad * 2, r.h + pad * 2), { fill: o.bg });
+    // 덮을 곳: OCR 낱말 상자와 실제로 글자가 찍힌 범위를 합친 것보다 조금 넉넉하게
+    const cv = o.ink ? { x: Math.min(r.x, o.ink.x), y: Math.min(r.y, o.ink.y), w: 0, h: 0 } : { ...r };
+    if (o.ink) { cv.w = Math.max(r.x + r.w, o.ink.x + o.ink.w) - cv.x; cv.h = Math.max(r.y + r.h, o.ink.y + o.ink.h) - cv.y; }
+    const pad = Math.max(0.6, cv.h * 0.1);
+    const patch = this.addSegPath(pc, this.shapeSegs('rect', cv.x - pad, cv.y - pad, cv.w + pad * 2, cv.h + pad * 2), { fill: o.bg });
     this.setObjMeta(d, patch, { t: 'ocrfix' });
     added.push({ h: patch, idx: this.P.FPDFPage_CountObjects(pc.page) - 1 });
     const text = newText.replace(/\r/g, '').split('\n')[0].trim();
     if (text) {
       const font = await this.loadSubsetFont(d, text, o.font);
-      const size = Math.max(3, vs * 0.95);
-      const t = this.P.FPDFPageObj_CreateTextObj(d.doc, font, size);
-      const w = this.wstr(text); this.P.FPDFText_SetText(t, w); this.free(w);
-      this.setMatrix(t, this.uprightMatrix(pc, r.x, oy, 1));
-      // 원래보다 많이 길면 원래 폭에 맞춰 조금 좁힌다
-      const b = this.objBounds(t);
-      if (b) { const rr = this.toDisp(pc, b[0], b[1], b[2], b[3]); if (rr.w > r.w * 1.12 && rr.w > 1) this.setMatrix(t, this.uprightMatrix(pc, r.x, oy, Math.max(0.6, r.w * 1.05 / rr.w))); }
+      // 원래 글자가 그림에 찍힌 범위(ink)에 맞춰: 높이가 같도록 크기를, 같은 자리에서 시작하도록 위치를
+      const ink = o.ink && o.ink.h > 1 ? o.ink : null;
+      let size = Math.max(3, vs * 0.95);
+      const make = (sz: number, sx: number, x: number, base: number) => {
+        const t2 = this.P.FPDFPageObj_CreateTextObj(d.doc, font, sz);
+        const w2 = this.wstr(text); this.P.FPDFText_SetText(t2, w2); this.free(w2);
+        this.setMatrix(t2, this.uprightMatrix(pc, x, base, sx));
+        const bb = this.objBounds(t2); return { t: t2, r: bb ? this.toDisp(pc, bb[0], bb[1], bb[2], bb[3]) : null };
+      };
+      let t = 0;
+      if (ink) {
+        // 1) 크기: 시험 삼아 만들어 높이를 재고 비율로 맞춘다
+        const probe = make(size, 1, ink.x, oy);
+        if (probe.r && probe.r.h > 0.5) size = Math.max(3, size * ink.h / probe.r.h);
+        this.P.FPDFPageObj_Destroy(probe.t);
+        // 2) 글자 수가 비슷하면 폭도 원래대로 (자간·장평 느낌을 지킨다)
+        const sameLen = o.oldText ? Math.abs([...text].length - [...o.oldText.replace(/\s/g, '')].length) <= Math.max(1, [...text].length * 0.15) : false;
+        const p2 = make(size, 1, ink.x, oy);
+        let sx = 1;
+        if (p2.r && p2.r.w > 0.5) { const want = ink.w / p2.r.w; sx = sameLen ? Math.max(0.6, Math.min(1.6, want)) : (want < 0.9 ? Math.max(0.6, want * 1.05) : 1); }
+        // 3) 위치: 글자 범위의 왼쪽·아래에 맞춘다
+        const dy = p2.r ? ink.y + ink.h - (p2.r.y + p2.r.h) : 0, dx = p2.r ? ink.x - p2.r.x : 0;
+        this.P.FPDFPageObj_Destroy(p2.t);
+        t = make(size, sx, ink.x + dx * sx, oy + dy).t;
+      } else {
+        t = make(size, 1, r.x, oy).t;
+        const b = this.objBounds(t);
+        if (b) { const rr = this.toDisp(pc, b[0], b[1], b[2], b[3]); if (rr.w > r.w * 1.12 && rr.w > 1) this.setMatrix(t, this.uprightMatrix(pc, r.x, oy, Math.max(0.6, r.w * 1.05 / rr.w))); }
+      }
       const [R, G, B] = fromHex(o.color);
       this.P.FPDFPageObj_SetFillColor(t, R, G, B, 255);
+      if (o.bold) this.fakeBold(t, [R, G, B, 255], size);
       this.P.FPDFPage_InsertObject(pc.page, t);
       added.push({ h: t, idx: this.P.FPDFPage_CountObjects(pc.page) - 1 });
     }
