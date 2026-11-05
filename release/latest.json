@@ -1,15 +1,15 @@
 {
-  "version": "0.7.0",
-  "notes": "위쪽 막대 정리(창 끌기 영역 넓힘, 어두운 화면 글자 밝게), 페이지 이동·확대는 아래 막대로, 전체 화면에서 위쪽 줄 자동 숨김, 탭 끌어 순서 바꾸기·새 창으로 떼어 내기·합치기, 스캔 보정 화질 개선, 스캔 글자 고칠 때 크기·굵기·글꼴 맞춤",
-  "pub_date": "2026-11-04T13:05:14Z",
+  "version": "0.8.0",
+  "notes": "새 로고·아이콘, 왼쪽 레일로 탐색 패널 켜고 끄기(목차·찾기 결과는 필요할 때만), 전체 화면에서 최대화 단추가 전체 화면 끝내기로, 최근 문서 창과 설정(기간·개수·무제한), 탐색기 미리보기 창·미리보기 그림, 'Air PDF' 프린터(그림 페이지는 자동 글자 인식), 종이가 꽉 찬 사진 보정·회색 글자 지워짐 고침",
+  "pub_date": "2026-11-05T02:35:19Z",
   "platforms": {
     "windows-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSZ1IvQktHdktZWmFvd29SYUtUemt3Lzl1MGg4K00yb1phakMyaUNmR3BHRTFkc3ZrK0paeTcvdFlCL0FRbE9XZVMySWd6MHFSZlZiOWhEUVRJUWsvZWNHRk1hck9MSGcwPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzNzk3NTA5CWZpbGU6QWlyUERGXzAuNy4wX3g2NC1zZXR1cC5leGUJdmVyc2lvbjowLjcuMApOUk5XeTdMWTdsSnNKOE1keFIwcEdvU250eGl1S1A1TnRVNk5VUndmcXYvNTNtQkVTYUVGVzBnMmhrbzZhd3JJYnZxK2x2aXdMWTBnZHVSTVVBSFNBZz09Cg==",
-      "url": "https://raw.githubusercontent.com/Geek-ohmtech/air-pdf/main/release/AirPDF_0.7.0_x64-setup.exe"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSZ1IvQktHdktZWlVCWkg2dVErMVlBRHdWaS85aDcrTTZPTU1wellLWkdzUThSWExrUTU3UHZabXJJU1FyNmZVWnJnZE1xNzQ2eTg0NnJreFZpVXJYdklZNXhpSlV1ZUFFPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzODQ2MTA1CWZpbGU6QWlyUERGXzAuOC4wX3g2NC1zZXR1cC5leGUJdmVyc2lvbjowLjguMApQK2gzWGo3ejdPZnpadEpLQUZqK1dEYitqU2tOeTU1dDVUcGZIRzMyYW11SzgrcWJLMkV0ZzhlVG5XdmRhN2pmTG5hcG1yNGU2Unp4MUppSGU2TkFCQT09Cg==",
+      "url": "https://raw.githubusercontent.com/Geek-ohmtech/air-pdf/main/release/AirPDF_0.8.0_x64-setup.exe"
     },
     "windows-x86_64-nsis": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSZ1IvQktHdktZWmFvd29SYUtUemt3Lzl1MGg4K00yb1phakMyaUNmR3BHRTFkc3ZrK0paeTcvdFlCL0FRbE9XZVMySWd6MHFSZlZiOWhEUVRJUWsvZWNHRk1hck9MSGcwPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzNzk3NTA5CWZpbGU6QWlyUERGXzAuNy4wX3g2NC1zZXR1cC5leGUJdmVyc2lvbjowLjcuMApOUk5XeTdMWTdsSnNKOE1keFIwcEdvU250eGl1S1A1TnRVNk5VUndmcXYvNTNtQkVTYUVGVzBnMmhrbzZhd3JJYnZxK2x2aXdMWTBnZHVSTVVBSFNBZz09Cg==",
-      "url": "https://raw.githubusercontent.com/Geek-ohmtech/air-pdf/main/release/AirPDF_0.7.0_x64-setup.exe"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSZ1IvQktHdktZWlVCWkg2dVErMVlBRHdWaS85aDcrTTZPTU1wellLWkdzUThSWExrUTU3UHZabXJJU1FyNmZVWnJnZE1xNzQ2eTg0NnJreFZpVXJYdklZNXhpSlV1ZUFFPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzODQ2MTA1CWZpbGU6QWlyUERGXzAuOC4wX3g2NC1zZXR1cC5leGUJdmVyc2lvbjowLjguMApQK2gzWGo3ejdPZnpadEpLQUZqK1dEYitqU2tOeTU1dDVUcGZIRzMyYW11SzgrcWJLMkV0ZzhlVG5XdmRhN2pmTG5hcG1yNGU2Unp4MUppSGU2TkFCQT09Cg==",
+      "url": "https://raw.githubusercontent.com/Geek-ohmtech/air-pdf/main/release/AirPDF_0.8.0_x64-setup.exe"
     }
   }
 }
