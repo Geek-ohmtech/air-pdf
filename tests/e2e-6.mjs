@@ -22,7 +22,7 @@ await page.click('.mode-b[data-m="edit"]'); await page.waitForSelector('.ribbon 
 await ev(() => { window.__app.setFit('page'); window.__app.view.scrollToPage(2); }); await page.waitForTimeout(700); // 3페이지: 그림만 있는 스캔 페이지
 
 console.log('스캔 페이지 바탕 그림');
-const pg = await page.locator('.page').nth(2).boundingBox(); const z = await ev(() => window.__app.view.zoom);
+const pg = await page.locator('.page[data-i="2"]').boundingBox(); const z = await ev(() => window.__app.view.zoom);
 await page.click('.rt[data-tool="select"]');
 await page.mouse.click(pg.x + 300 * z, pg.y + 400 * z); await page.waitForTimeout(300);
 ok(!(await ev(() => window.__app.editor.sel)), '페이지 전체 그림은 눌러도 덩어리로 안 잡힘');
@@ -59,7 +59,7 @@ await page.click('.rb-tab[data-t="edit"]'); await page.click('.rt[data-tool="edi
 const runs = await runsOf(2);
 const target = runs.find(r => r.invisible && /계약/.test(r.text)) || runs.find(r => r.invisible && r.text.length > 4);
 await ev(r => window.__app.view.scrollToRect(2, r.rect), target); await page.waitForTimeout(500);
-const pg3 = await page.locator('.page').nth(2).boundingBox();
+const pg3 = await page.locator('.page[data-i="2"]').boundingBox();
 await page.mouse.click(pg3.x + (target.rect.x + 3) * z, pg3.y + (target.rect.y + target.rect.h / 2) * z);
 await page.waitForSelector('textarea.ed-text.ocr');
 await page.fill('textarea.ed-text', '고친 스캔 글자'); await page.keyboard.press('Enter'); await page.waitForTimeout(1500);

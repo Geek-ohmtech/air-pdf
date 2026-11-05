@@ -21,7 +21,7 @@ ok(m.pages === 12, `12쪽 문서 열림 (시작 ${m.boot?.toFixed(0)}ms, 열기 
 await page.screenshot({ path: SHOT + '/e1-view.png' });
 
 // 글자 끌어 선택 + 복사
-const pg = await page.locator('.page').first().boundingBox();
+const pg = await page.locator('.page[data-i="0"]').boundingBox();
 const z = await page.evaluate(() => window.__app.view.zoom);
 await page.mouse.move(pg.x + 66 * z, pg.y + 128 * z);
 await page.waitForTimeout(300);
@@ -46,7 +46,7 @@ await page.waitForTimeout(500);
 // 원본 글자 고치기
 await page.click('.rt[data-tool="editText"]');
 await page.waitForTimeout(500);
-const pg2 = await page.locator('.page').first().boundingBox();
+const pg2 = await page.locator('.page[data-i="0"]').boundingBox();
 const z2 = await page.evaluate(() => window.__app.view.zoom);
 await page.mouse.click(pg2.x + 120 * z2, pg2.y + (120 + 11 * 1.25 + 8) * z2);
 await page.waitForSelector('textarea.ed-text');

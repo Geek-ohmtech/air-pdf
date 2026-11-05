@@ -2,7 +2,7 @@ import type { EngineClient } from './engine/client.ts';
 import type { DocInfo, LinkInfo, OutlineItem, SearchHit } from './engine/types.ts';
 import { FormLayer } from './viewer/forms.ts';
 import { Shortcuts } from './shortcuts.ts';
-import type { Batch, BatchMode, OpenedFile, Platform, SavedTarget, UpdateInfo } from './platform/types.ts';
+import type { Batch, BatchMode, OpenedFile, Platform, RecentItem, SavedTarget, UpdateInfo } from './platform/types.ts';
 import { baseName } from './platform/types.ts';
 import { DocView } from './viewer/docview.ts';
 import { Sidebar } from './viewer/sidebar.ts';
@@ -38,7 +38,7 @@ export class App {
   private searchInput!: HTMLInputElement; private saveBtn!: HTMLButtonElement; private modeBtns!: HTMLElement;
   private hits: SearchHit[] = []; private hitByPage = new Map<number, SearchHit[]>(); private hitIdx = -1; private lastQuery = '';
   private searchOpts = { matchCase: false, wholeWord: false };
-  prefs: { theme: string; spread: boolean; night: boolean; sidebar: boolean; author: string; shortcuts?: Record<string, string[]>; autoUpdate?: boolean; accent?: string; scanSuggest?: boolean; scanDefault?: { correct: boolean; ocr: boolean } } = { theme: 'system', spread: false, night: false, sidebar: true, author: '' };
+  prefs: { theme: string; spread: boolean; night: boolean; sidebar: boolean; author: string; shortcuts?: Record<string, string[]>; autoUpdate?: boolean; accent?: string; scanSuggest?: boolean; scanDefault?: { correct: boolean; ocr: boolean }; recent?: { on: boolean; days: number; max: number }; printerAsked?: boolean } = { theme: 'system', spread: false, night: false, sidebar: true, author: '' };
 
   constructor(engine: EngineClient, platform: Platform) {
     this.engine = engine; this.platform = platform;
@@ -68,8 +68,11 @@ export class App {
     this.organizer = new Organizer(this, main);
     this.sidebar.onOrganize = () => this.organizer.toggle();
     this.sidebar.el.hidden = !this.prefs.sidebar || innerWidth < 860;
+    this.sidebar.show('thumbs');
+    this.sidebar.onToggle = shown => { if (innerWidth >= 860) { this.prefs.sidebar = shown; this.savePrefs(); } };
     this.start = this.buildStart();
     this.stage.append(this.start);
+    this.drawStartRecent();
     this.view.spread = this.prefs.spread; this.view.night = this.prefs.night;
     this.view.onPage = i => this.onPage(i);
     this.view.onZoom = () => this.updateZoom();
@@ -110,12 +113,14 @@ export class App {
     });
     this.updateStatus();
     if (platform.checkUpdate && this.prefs.autoUpdate !== false) setTimeout(() => this.checkUpdate(false), 4000);
+    if (platform.printer && (!platform.tabs || platform.tabs.label === 'main')) setTimeout(() => this.offerPrinter(), 2500);
   }
   /* ───────────── 탐색기에서 넘어온 일 ───────────── */
   private batchBuf: { mode: BatchMode; files: OpenedFile[] } | null = null; private batchT = 0; private batchDone: (() => void) | null = null;
   /** 여러 파일을 선택해 탐색기 메뉴를 누르면 파일마다 따로 들어오므로, 잠깐 모았다가 한 번에 처리한다 */
   async handleBatch(b: Batch) {
     if (!b.mode) { if (b.files.length) await this.openFiles(b.files); return; }
+    if (b.mode === 'printed') { for (const f of b.files) await this.openPrinted(f); return; }
     if (this.batchBuf && this.batchBuf.mode !== b.mode) this.flushBatch();
     if (!this.batchBuf) { this.batchBuf = { mode: b.mode, files: [] }; this.batchDone = this.loading('탐색기에서 선택한 파일을 모으는 중…'); }
     for (const f of b.files) if (!this.batchBuf.files.some(x => x.path && x.path === f.path)) this.batchBuf.files.push(f);
@@ -136,6 +141,55 @@ export class App {
         return imgs.length ? m.imagesToPdf(this, imgs) : this.openFiles(files);
       }
     });
+  }
+  /** 'Air PDF' 프린터로 인쇄한 문서: 새 문서로 열고, 글자가 없는(그림으로 인쇄된) 페이지는 글자 인식을 한다 */
+  async openPrinted(f: OpenedFile) {
+    const r = await this.engine.call<{ docId?: number; error?: string }>('open', [f.bytes, '']);
+    if (!r.docId) { toast('인쇄한 문서를 열지 못했습니다.'); return; }
+    const id = r.docId, d = new Date(), name = `인쇄한 문서 ${d.getMonth() + 1}-${d.getDate()} ${String(d.getHours()).padStart(2, '0')}${String(d.getMinutes()).padStart(2, '0')}.pdf`;
+    const n = (await this.engine.call<DocInfo>('info', [id])).pages.length;
+    const empty: number[] = [];
+    for (let i = 0; i < n; i++) if (!await this.engine.call<boolean>('hasText', [id, i])) empty.push(i);
+    let msg = '';
+    if (empty.length) {
+      const b = busy(`글자가 그림으로 인쇄되어 글자 인식을 합니다… (${empty.length}페이지)`);
+      try {
+        const { ocrPages } = await import('./editor/ocr.ts');
+        const keys = await this.engine.call<number[]>('keys', [id]);
+        const o = await ocrPages(this.engine, id, empty.map(i => ({ index: i, key: keys[i] })), { progress: m => b.set(m) });
+        msg = o.words ? ` 그림으로 된 ${empty.length}페이지는 글자를 인식해 찾기·복사가 됩니다.` : '';
+      } catch (e: any) { msg = ' (글자 인식은 하지 못했습니다: ' + (e?.message || e) + ')'; }
+      finally { b.done(); }
+    }
+    await this.addTab(id, name, true);
+    toast(`인쇄한 문서를 열었습니다.${msg} Ctrl+S로 저장하세요.`, 5000);
+  }
+  /** 'Air PDF' 프린터 추가·빼기 (관리자 확인 창이 한 번 뜬다) */
+  async setPrinter(on: boolean) {
+    const P = this.platform.printer; if (!P) return false;
+    const b = busy(on ? '프린터를 추가하는 중… 관리자 확인 창에서 “예”를 누르세요.' : '프린터를 빼는 중…');
+    try {
+      const now = await P.set(on);
+      toast(now ? '“Air PDF” 프린터를 추가했습니다. 어느 프로그램에서든 인쇄 → Air PDF를 고르면 PDF로 만들어 열립니다.' : '“Air PDF” 프린터를 뺐습니다.', 5200);
+      return now;
+    } catch (e: any) {
+      const m = String(e?.message || e);
+      toast(m === 'cancelled' ? '취소했습니다.' : '프린터를 바꾸지 못했습니다: ' + m, 4200);
+      return null;
+    } finally { b.done(); }
+  }
+  /** 0.8.0부터: 처음 한 번만 프린터 추가를 물어본다 */
+  private async offerPrinter() {
+    const P = this.platform.printer; if (!P || this.prefs.printerAsked) return;
+    const st = await P.status().catch(() => null); if (!st?.supported) return;
+    this.prefs.printerAsked = true; this.savePrefs();
+    if (st.installed) return;
+    const r = await dialog({ title: '“Air PDF” 프린터', body: h('div', { class: 'form' },
+      h('p', {}, 'Windows 프린터 목록에 ', h('b', {}, 'Air PDF'), '를 추가할까요?'),
+      h('p', {}, '워드·한글·웹 브라우저 등 어느 프로그램에서든 인쇄에서 Air PDF를 고르면 PDF로 만들어 바로 열립니다. 글자는 글자 그대로 남고, 그림으로만 인쇄된 페이지는 글자 인식(OCR)을 해서 찾기·복사가 되게 합니다.'),
+      h('p', { class: 'hint' }, '추가할 때 Windows 관리자 확인 창이 한 번 뜹니다. 나중에 설정에서도 추가·뺄 수 있습니다.')),
+      buttons: [{ label: '나중에', value: false }, { label: '프린터 추가', value: true, primary: true }] });
+    if (r?.value) await this.setPrinter(true);
   }
   /* ───────────── 업데이트 / 기본 프로그램 ───────────── */
   async checkUpdate(manual: boolean) {
@@ -203,6 +257,25 @@ export class App {
     const sug = cb(P.scanSuggest !== false), defC = cb(P.scanDefault?.correct ?? true), defO = cb(P.scanDefault?.ocr ?? true);
     const upd = cb(P.autoUpdate !== false);
     const author = h('input', { class: 'field', value: P.author || '', placeholder: '사용자', 'aria-label': '주석 작성자 이름' }) as HTMLInputElement;
+    const R = this.recentPrefs, recOn = cb(R.on);
+    const sel = (opts: [number, string][], v: number, label: string) => { const e = h('select', { class: 'field sm', 'aria-label': label }, ...opts.map(([n, t]) => h('option', { value: String(n), selected: n === v ? '' : undefined }, t))) as HTMLSelectElement; if (!opts.some(o => o[0] === v)) e.append(h('option', { value: String(v), selected: '' }, String(v))); return e; };
+    const recDays = sel([[7, '7일'], [30, '30일'], [90, '90일'], [365, '1년'], [0, '무제한']], R.days, '최근 문서 기간');
+    const recMax = sel([[10, '10개'], [20, '20개'], [50, '50개'], [100, '100개'], [0, '무제한']], R.max, '최근 문서 개수');
+    const syncRec = () => { recDays.disabled = recMax.disabled = !recOn.checked; }; recOn.addEventListener('change', syncRec); syncRec();
+    const hasRecent = this.platform.kind !== 'web';
+    // 프린터: 상태를 읽어 와서 단추를 바꾼다
+    let prnRow: HTMLElement | null = null;
+    if (this.platform.printer) {
+      const sub = h('small', {}, '확인 중…'), btn = h('button', { class: 'btn sm', type: 'button', disabled: '' }, '…') as HTMLButtonElement;
+      prnRow = h('div', { class: 'set-row' }, h('span', {}, '“Air PDF” 프린터', sub), btn);
+      const draw = (st: { supported: boolean; installed: boolean } | null) => {
+        if (!st?.supported) { sub.textContent = '설치판에서만 쓸 수 있습니다'; btn.textContent = '추가'; btn.disabled = true; return; }
+        sub.textContent = st.installed ? '인쇄 → Air PDF로 PDF를 만들어 엽니다 (그림 페이지는 글자 인식)' : '어느 프로그램에서든 인쇄해 PDF로 만들기';
+        btn.textContent = st.installed ? '빼기…' : '추가하기…'; btn.disabled = false;
+        btn.onclick = async () => { btn.disabled = true; const now = await this.setPrinter(!st.installed); draw(now === null ? st : { supported: true, installed: now }); };
+      };
+      this.platform.printer.status().then(draw, () => draw(null));
+    }
     const row = (label: string, sub: string, ctl: Node) => h('label', { class: 'set-row' }, h('span', {}, label, sub ? h('small', {}, sub) : null), ctl);
     const btnRow = (label: string, sub: string, text: string, fn: () => void) => h('div', { class: 'set-row' }, h('span', {}, label, sub ? h('small', {}, sub) : null), h('button', { class: 'btn sm', type: 'button', onclick: fn }, text));
     const body = h('div', { class: 'settings' },
@@ -215,6 +288,12 @@ export class App {
         row('글자 인식 OCR (제안을 숨겼을 때 기본값)', '찾기·복사가 되도록 글자층을 얹기', defO)),
       h('section', { class: 'set-sec' }, h('h3', {}, '편집'),
         row('주석 작성자 이름', '메모·형광펜 등에 적힙니다', author)),
+      hasRecent ? h('section', { class: 'set-sec' }, h('h3', {}, '최근 문서'),
+        row('최근 문서 기록', '끄면 지금까지의 목록도 지웁니다', recOn),
+        row('기간', '이보다 오래전에 연 문서는 목록에서 뺍니다', recDays),
+        row('개수', '목록에 남길 문서 수', recMax),
+        btnRow('목록', '', '최근 문서 보기…', () => this.recentDialog())) : null,
+      prnRow ? h('section', { class: 'set-sec' }, h('h3', {}, 'Windows 프린터'), prnRow) : null,
       this.platform.checkUpdate || this.platform.defaultApp ? h('section', { class: 'set-sec' }, h('h3', {}, '프로그램'),
         this.platform.checkUpdate ? row('자동으로 업데이트 확인', '켤 때 새 버전이 있는지 확인합니다', upd) : null,
         this.platform.defaultApp ? btnRow('기본 PDF 프로그램', 'PDF 파일을 Air PDF로 열기', '지정하기…', () => this.makeDefault()) : null) : null);
@@ -222,6 +301,7 @@ export class App {
     if (!r?.value) return;
     P.scanSuggest = sug.checked; P.scanDefault = { correct: defC.checked, ocr: defO.checked };
     P.autoUpdate = upd.checked; P.author = author.value.trim();
+    if (hasRecent) { P.recent = { on: recOn.checked, days: +recDays.value, max: +recMax.value }; this.pruneRecent(); this.drawStartRecent(); }
     this.engine.call('setAuthor', [P.author || '사용자']).catch(() => {});
     this.savePrefs(); toast('설정을 저장했습니다.');
   }
@@ -266,7 +346,6 @@ export class App {
       h('button', { type: 'button', class: 'mode-b', dataset: { m: 'edit' }, 'aria-pressed': 'false', title: '편집 모드 (Ctrl+E로 전환)', onclick: () => this.setMode('edit') }, icon('edit'), h('span', {}, '편집')));
     const inner = h('div', { class: 'tb-inner' },
       h('div', { class: 'tb-group' },
-        this.tb('sidebar', '탐색 패널 (F12)', () => this.toggleSidebar()),
         h('span', { class: 'brand', 'data-tauri-drag-region': '' }, h('img', { class: 'brand-mark', src: 'icon-64.png', alt: '', 'data-tauri-drag-region': '', draggable: 'false' }), h('span', { class: 'brand-name', 'data-tauri-drag-region': '' }, 'Air PDF')),
         this.tb('open', '열기 (Ctrl+O)', () => this.pickAndOpen()),
         this.saveBtn),
@@ -282,8 +361,16 @@ export class App {
       for (const el of [head, scroll, inner]) el.setAttribute('data-tauri-drag-region', '');
       const svg = (d: string) => h('span', { class: 'wc-ico', html: `<svg viewBox="0 0 10 10" width="10" height="10" fill="none" stroke="currentColor" stroke-width="1">${d}</svg>` });
       const maxIco = '<rect x="0.5" y="0.5" width="9" height="9"/>', restoreIco = '<rect x="0.5" y="2.5" width="7" height="7"/><path d="M2.5 2.5V0.5h7v7h-2"/>';
-      const maxBtn = h('button', { class: 'wc', type: 'button', title: '최대화', 'aria-label': '최대화', onclick: () => W.toggleMaximize() }, svg(maxIco));
-      const sync = () => W.isMaximized().then(m => { maxBtn.innerHTML = ''; maxBtn.append(svg(m ? restoreIco : maxIco)); maxBtn.title = m ? '이전 크기로' : '최대화'; head.classList.toggle('maxed', m); }).catch(() => {});
+      const exitFsIco = '<path d="M3.5 0.5v3h-3M6.5 0.5v3h3M3.5 9.5v-3h-3M6.5 9.5v-3h3"/>';
+      // 전체 화면일 때는 최대화 단추가 '전체 화면 끝내기'가 된다
+      const maxBtn = h('button', { class: 'wc', type: 'button', title: '최대화', 'aria-label': '최대화', onclick: () => this.root.classList.contains('fs') ? this.platform.toggleFullscreen() : W.toggleMaximize() }, svg(maxIco));
+      const sync = () => W.isMaximized().then(m => {
+        const fs = this.root.classList.contains('fs');
+        maxBtn.innerHTML = ''; maxBtn.append(svg(fs ? exitFsIco : m ? restoreIco : maxIco));
+        const t = fs ? '전체 화면 끝내기 (F11)' : m ? '이전 크기로' : '최대화'; maxBtn.title = t; maxBtn.setAttribute('aria-label', t);
+        head.classList.toggle('maxed', m || fs);
+      }).catch(() => {});
+      this.syncWinBtns = sync;
       W.onResized(sync); sync();
       head.append(h('div', { class: 'win-ctl' },
         h('button', { class: 'wc', type: 'button', title: '최소화', 'aria-label': '최소화', onclick: () => W.minimize() }, svg('<path d="M0 5.5h10"/>')),
@@ -294,20 +381,21 @@ export class App {
     return head;
   }
   /** 전체 화면: 위쪽 줄들을 숨기고, 마우스를 화면 맨 위에 대면 내려온다 */
+  private syncWinBtns: () => void = () => {};
   private bindFullscreen() {
     const hot = h('div', { class: 'fs-hot', 'aria-hidden': 'true' });
     document.body.append(hot);
     let t = 0;
     // 내려와 있는 동안은 감지 띠를 꺼서 도구줄이 마우스를 받게 한다 (그래야 벗어날 때를 안다)
     const watch = (e: PointerEvent) => { if (e.clientY > this.chrome.getBoundingClientRect().bottom + 24) hide(); else clearTimeout(t); };
-    const show = () => { clearTimeout(t); this.chrome.classList.add('peek'); hot.style.pointerEvents = 'none'; document.addEventListener('pointermove', watch); };
+    const show = () => { clearTimeout(t); this.root.style.setProperty('--chrome-h', this.chrome.offsetHeight + 'px'); this.chrome.classList.add('peek'); hot.style.pointerEvents = 'none'; document.addEventListener('pointermove', watch); };
     const hide = () => { clearTimeout(t); t = window.setTimeout(() => { if (!this.chrome.matches(':hover') && !this.chrome.contains(document.activeElement) && !document.querySelector('.menu, .color-pop')) { this.chrome.classList.remove('peek'); hot.style.pointerEvents = ''; document.removeEventListener('pointermove', watch); } }, 450); };
     hot.addEventListener('pointerenter', show);
     this.chrome.addEventListener('pointerenter', show);
     this.chrome.addEventListener('pointerleave', hide);
     this.chrome.addEventListener('focusin', show);
     this.chrome.addEventListener('focusout', hide);
-    this.platform.onFullscreen?.(on => { this.root.classList.toggle('fs', on); document.body.classList.toggle('fs', on); this.chrome.classList.remove('peek'); if (on) toast('전체 화면 · 마우스를 화면 맨 위에 대면 도구줄이 나옵니다. F11이나 Esc로 끝냅니다.', 3200); });
+    this.platform.onFullscreen?.(on => { this.root.classList.toggle('fs', on); document.body.classList.toggle('fs', on); this.chrome.classList.remove('peek'); this.syncWinBtns(); if (on) toast('전체 화면 · 마우스를 화면 맨 위에 대면 도구줄이 나옵니다. F11이나 Esc로 끝냅니다.', 3200); });
   }
   /** 아래 막대 오른쪽: 페이지 이동 · 확대/축소 · 맞춤 */
   private buildStatusControls() {
@@ -325,8 +413,64 @@ export class App {
         sb('fit', '페이지 너비 맞춤 (Ctrl+2)', () => this.setFit('width')),
         sb('fitPage', '페이지 전체 맞춤 (Ctrl+0)', () => this.setFit('page'))));
   }
+  private startRecent!: HTMLElement;
+  /** 시작 화면의 최근 문서 (8개까지, 더 있으면 '모두 보기') */
+  private drawStartRecent() {
+    const list = this.recentList(), box = this.startRecent; if (!box) return;
+    box.innerHTML = ''; box.hidden = !list.length;
+    if (!list.length) return;
+    box.append(h('h3', {}, '최근 문서', list.length > 8 ? h('button', { class: 'link-btn', type: 'button', onclick: () => this.recentDialog() }, `모두 보기 (${list.length})`) : null),
+      ...list.slice(0, 8).map(it => this.recentRow(it)));
+  }
+  private recentRow(it: RecentItem, after?: () => void) {
+    return h('button', { class: 'recent-item', type: 'button', title: it.path, onclick: () => { after?.(); this.openRecent(it.path); } },
+      icon('open'), h('span', { class: 'recent-name' }, baseName(it.path)), h('span', { class: 'recent-path' }, it.path));
+  }
+  private async openRecent(path: string) {
+    try { await this.openFiles([await this.platform.readPath(path)]); }
+    catch {
+      const r = await dialog({ title: '파일을 찾을 수 없습니다', body: h('div', {}, h('p', { class: 'recent-path' }, path), h('p', {}, '옮겨지거나 지워졌을 수 있습니다. 최근 문서 목록에서 뺄까요?')), buttons: [{ label: '그대로 두기', value: false }, { label: '목록에서 빼기', value: true, primary: true }] });
+      if (r?.value) { this.platform.setRecent(this.platform.recent().filter(x => x.path !== path)); this.drawStartRecent(); }
+    }
+  }
+  private get recentPrefs() { return { on: true, days: 0, max: 20, ...this.prefs.recent }; }
+  /** 설정(기간·개수)에 맞는 최근 문서 */
+  recentList(): RecentItem[] {
+    const R = this.recentPrefs; if (!R.on) return [];
+    const since = R.days ? Date.now() - R.days * 86400000 : 0;
+    const l = this.platform.recent().filter(x => x.at >= since);
+    return R.max ? l.slice(0, R.max) : l;
+  }
+  private addRecent(path: string) { if (this.recentPrefs.on) this.platform.addRecent(path); }
+  /** 설정에서 벗어난 기록은 지운다 */
+  private pruneRecent() {
+    const R = this.recentPrefs;
+    if (!R.on) { this.platform.setRecent([]); return; }
+    this.platform.setRecent(this.recentList());
+  }
+  /** … 메뉴 → 최근 문서: 찾기, 열기, 목록에서 빼기 */
+  async recentDialog() {
+    const q = h('input', { class: 'field', type: 'search', placeholder: '이름이나 위치로 찾기', 'aria-label': '최근 문서에서 찾기' }) as HTMLInputElement;
+    const list = h('div', { class: 'recent recent-all' });
+    const fmt = (t: number) => { const d = new Date(t), now = new Date(); const day = 86400000; const diff = Math.floor((new Date(now.toDateString()).getTime() - new Date(d.toDateString()).getTime()) / day); return diff <= 0 ? d.toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' }) : diff === 1 ? '어제' : diff < 7 ? `${diff}일 전` : d.toLocaleDateString('ko-KR'); };
+    let close = () => {};
+    const draw = () => {
+      const all = this.recentList(), k = q.value.trim().toLowerCase();
+      const shown = k ? all.filter(x => x.path.toLowerCase().includes(k)) : all;
+      list.innerHTML = '';
+      if (!all.length) { list.append(h('p', { class: 'empty' }, this.recentPrefs.on ? '최근에 연 문서가 없습니다.' : '최근 문서 기록이 꺼져 있습니다. 설정에서 켤 수 있습니다.')); return; }
+      if (!shown.length) { list.append(h('p', { class: 'empty' }, '맞는 문서가 없습니다.')); return; }
+      for (const it of shown) list.append(h('div', { class: 'recent-line' }, this.recentRow(it, () => close()), h('span', { class: 'recent-when' }, fmt(it.at)),
+        h('button', { class: 'tb sm', type: 'button', title: '목록에서 빼기', 'aria-label': baseName(it.path) + ' 목록에서 빼기', onclick: () => { this.platform.setRecent(this.platform.recent().filter(x => x.path !== it.path)); draw(); this.drawStartRecent(); } }, icon('close'))));
+    };
+    q.addEventListener('input', draw); draw();
+    const r = await dialog({ title: '최근 문서', body: h('div', { class: 'recent-dlg' }, q, list), wide: true, cls: 'recent-modal',
+      onOpen: root => { close = () => (root.querySelector('.modal-actions .btn.primary') as HTMLElement)?.click(); q.focus(); },
+      buttons: [{ label: '목록 모두 지우기', value: 'clear', left: true, danger: true }, { label: '설정…', value: 'set' }, { label: '닫기', value: 'close', primary: true }] });
+    if (r?.value === 'clear') { const ok = await dialog({ title: '최근 문서 목록 지우기', body: '목록만 지우고 파일은 그대로 둡니다.', buttons: [{ label: '취소', value: false }, { label: '지우기', value: true, primary: true, danger: true }] }); if (ok?.value) { this.platform.setRecent([]); this.drawStartRecent(); toast('최근 문서 목록을 지웠습니다.'); } }
+    else if (r?.value === 'set') this.settings();
+  }
   private buildStart() {
-    const recent = this.platform.recent();
     return h('div', { class: 'start' },
       h('div', { class: 'start-card' },
         h('h1', { class: 'start-logo' }, h('img', { class: 'logo-light', src: 'logo.png', alt: 'Air PDF' }), h('img', { class: 'logo-dark', src: 'logo-dark.png', alt: 'Air PDF' })),
@@ -335,7 +479,7 @@ export class App {
         h('div', { class: 'start-btns' }, h('button', { class: 'btn primary big', type: 'button', onclick: () => this.pickAndOpen() }, icon('open'), 'PDF 열기'),
           h('button', { class: 'btn big', type: 'button', onclick: () => import('./tools.ts').then(m => m.imagesToPdf(this)) }, icon('image'), '이미지로 PDF 만들기')),
         h('p', { class: 'start-hint' }, this.platform.kind === 'web' ? '또는 이 창에 PDF를 끌어다 놓으세요. 파일은 이 컴퓨터 밖으로 나가지 않습니다.' : '또는 이 창에 PDF를 끌어다 놓으세요.'),
-        recent.length ? h('div', { class: 'recent' }, h('h3', {}, '최근 문서'), ...recent.map(p => h('button', { class: 'recent-item', type: 'button', title: p, onclick: async () => { try { this.openFiles([await this.platform.readPath(p)]); } catch { toast('파일을 찾을 수 없습니다: ' + p); } } }, icon('open'), h('span', { class: 'recent-name' }, baseName(p)), h('span', { class: 'recent-path' }, p)))) : null,
+        this.startRecent = h('div', { class: 'recent' }),
         h('div', { class: 'start-keys' },
           ...[['Ctrl+O', '열기'], ['Ctrl+F', '찾기'], ['Ctrl+E', '보기/편집 전환'], ['Ctrl+휠', '확대'], ['F1', '단축키']].map(([k, v]) => h('span', {}, h('kbd', {}, k), ' ', v)))));
   }
@@ -379,7 +523,7 @@ export class App {
       return;
     }
     const tab = await this.makeTab(docId, f.name, unsaved, unsaved ? null : f.path || f.handle ? { name: f.name, path: f.path, handle: f.handle } : null, f.bytes.length);
-    if (f.path) this.platform.addRecent(f.path);
+    if (f.path) this.addRecent(f.path);
     requestAnimationFrame(() => (window as any).__openMs = performance.now() - t0);
     if (pw) toast('암호를 확인했습니다. 저장하면 같은 암호가 유지됩니다.');
     else if (tab.formType === 1) toast('입력란이 있는 문서입니다. 칸을 누르면 바로 입력할 수 있습니다.', 3600);
@@ -451,7 +595,7 @@ export class App {
         this.forms.reset();
         this.view.setDoc(0, []);
         this.sidebar.buildThumbs(); this.sidebar.setOutline([]);
-        this.root.classList.add('no-doc'); this.start.hidden = false; this.organizer.hide();
+        this.root.classList.add('no-doc'); this.start.hidden = false; this.organizer.hide(); this.drawStartRecent();
         this.editor?.loadState(undefined);
         this.updateTitle(); this.updateStatus();
       }
@@ -579,7 +723,7 @@ export class App {
         const t = await this.platform.saveAs(suggest, bytes);
         if (!t) return false;
         d.target = t; d.name = t.name;
-        if (t.path) this.platform.addRecent(t.path);
+        if (t.path) this.addRecent(t.path);
       }
       d.dirty = false; d.size = bytes.length;
       this.updateTitle(); this.updateStatus(); this.renderTabs();
@@ -680,7 +824,7 @@ export class App {
       ...[50, 75, 100, 125, 150, 200, 300, 400].map(p => ({ label: p + '%', action: z(p), checked: !this.view.fit && this.zoomPct() === p })),
     ]);
   }
-  toggleSidebar() { const show = this.sidebar.el.hidden; this.sidebar.el.hidden = !show; if (innerWidth >= 860) { this.prefs.sidebar = show; this.savePrefs(); } }
+  toggleSidebar() { this.sidebar.toggle(); }
   private followLink(l: LinkInfo) {
     if (l.uri) {
       if (/^(https?|mailto):/i.test(l.uri)) this.platform.openUrl(l.uri);
@@ -694,7 +838,6 @@ export class App {
     this.lastQuery = q; this.hits = []; this.hitByPage = new Map(); this.hitIdx = -1;
     this.engine.call('cancelSearch');
     this.sidebar.searchStart(q);
-    if (this.sidebar.el.hidden) this.toggleSidebar();
     let jumped = false;
     const docId = this.doc.id;
     const res = await this.engine.call<{ cancelled: boolean; found: number }>('search', [docId, q, this.searchOpts], {
@@ -731,6 +874,7 @@ export class App {
     if (!this.lastQuery && !this.hits.length) return;
     const q = this.lastQuery;
     this.clearSearch();
+    this.sidebar.setTabVisible('search', true);
     this.sidebar.searchProgress(q, 0, 0, 0, true);
     (this.sidebar.panels.get('search')!.querySelector('.search-head') as HTMLElement).textContent = `문서가 바뀌어 “${q}” 찾기 결과를 지웠습니다. 찾기 칸에서 Enter를 누르면 다시 찾습니다.`;
     (this.sidebar.panels.get('search')!.querySelector('.search-list') as HTMLElement).innerHTML = '';
@@ -739,6 +883,7 @@ export class App {
     this.engine.call('cancelSearch').catch(() => {});
     this.lastQuery = ''; this.hits = []; this.hitByPage = new Map(); this.hitIdx = -1;
     this.view.setHits(this.hitByPage, null);
+    this.sidebar.setTabVisible('search', false);
   }
 
   /* ───────────── 메뉴 / 상태 표시줄 ───────────── */
@@ -747,6 +892,7 @@ export class App {
     const r = btn.getBoundingClientRect();
     menu({ x: r.right - 240, y: r.bottom + 4 }, [
       { label: '열기…', icon: 'open', hint: 'Ctrl+O', action: () => this.pickAndOpen() },
+      ...(this.platform.kind !== 'web' ? [{ label: '최근 문서…', icon: 'recent' as const, hint: this.shortcuts.label('recent'), action: () => this.recentDialog() }] : []),
       { label: '저장', icon: 'save', hint: 'Ctrl+S', action: () => this.save(false), disabled: !this.doc },
       { label: '다른 이름으로 저장…', icon: 'save', hint: 'Ctrl+Shift+S', action: () => this.save(true), disabled: !this.doc },
       { label: '인쇄…', icon: 'print', hint: 'Ctrl+P', action: () => this.print(), disabled: !this.doc }, '-',
@@ -863,6 +1009,7 @@ export class App {
       ...[1, 2, 3, 4, 5, 6, 7, 8, 9].map(n => ({ id: 'tab' + n, group: '탭', label: n === 9 ? '마지막 탭' : `${n}번째 탭`, keys: ['Alt+' + n], run: () => { const t = n === 9 ? this.tabs[this.tabs.length - 1] : this.tabs[n - 1]; if (t) this.activate(t); } })),
       { id: 'mode', group: '보기', label: '보기 ↔ 편집 모드', keys: ['Ctrl+E'], run: () => this.setMode(this.mode === 'edit' ? 'view' : 'edit'), allowTyping: true },
       { id: 'settings', group: '보기', label: '설정', keys: ['Ctrl+,'], run: () => this.settings() },
+      { id: 'recent', group: '파일', label: '최근 문서', keys: ['Alt+R'], run: () => { if (this.platform.kind !== 'web') this.recentDialog(); } },
       { id: 'organizer', group: '보기', label: '페이지 구성 보기', keys: ['Ctrl+Shift+G'], run: () => this.organizer.toggle(), when: doc, allowTyping: true },
       { id: 'sidebar', group: '보기', label: '탐색 패널 보이기/숨기기', keys: ['F12', 'Ctrl+Shift+B'], run: () => this.toggleSidebar(), allowTyping: true },
       { id: 'fullscreen', group: '보기', label: '전체 화면', keys: ['F11'], run: () => this.platform.toggleFullscreen(), allowTyping: true },

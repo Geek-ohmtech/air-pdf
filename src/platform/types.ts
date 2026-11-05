@@ -1,6 +1,7 @@
+export interface RecentItem { path: string; at: number }
 export interface OpenedFile { name: string; bytes: Uint8Array; path?: string; handle?: any }
 export interface SavedTarget { name: string; path?: string; handle?: any }
-export type BatchMode = 'merge' | 'split' | 'to-images' | 'to-pdf' | 'batch';
+export type BatchMode = 'merge' | 'split' | 'to-images' | 'to-pdf' | 'batch' | 'printed';
 export interface Batch { mode: BatchMode | null; files: OpenedFile[] }
 export interface UpdateInfo { version: string; notes: string; install(progress: (done: number, total: number) => void): Promise<void> }
 export interface Platform {
@@ -24,6 +25,8 @@ export interface Platform {
   reveal?(path: string): void;
   /** 기본 PDF 프로그램: 지금 상태(알 수 없으면 null)와 지정하기 */
   defaultApp?: { status(): Promise<boolean | null>; make(): Promise<void> };
+  /** Windows 프린터 목록의 'Air PDF' (supported: 설치판이라 쓸 수 있음) */
+  printer?: { status(): Promise<{ supported: boolean; installed: boolean }>; set(on: boolean): Promise<boolean> };
   version?(): Promise<string>;
   /** 설치판: 창 테두리를 앱이 직접 그린다 (최소화·최대화·닫기) */
   /** 설치판: 탭을 다른 창으로 옮기기 (떼어 내기·합치기) */
@@ -39,8 +42,10 @@ export interface Platform {
   win?: { minimize(): void; toggleMaximize(): void; close(): void; isMaximized(): Promise<boolean>; onResized(cb: () => void): void };
   checkUpdate?(): Promise<UpdateInfo | null>;
   readPath(path: string): Promise<OpenedFile>;
-  recent(): string[];
+  /** 최근 문서 (새것부터). at: 마지막으로 연 때(ms) */
+  recent(): RecentItem[];
   addRecent(path: string): void;
+  setRecent(list: RecentItem[]): void;
   setTitle(title: string): void;
   openUrl(url: string): void;
   onCloseRequest(cb: () => Promise<boolean>): void;

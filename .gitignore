@@ -12,3 +12,5 @@ release/*.zip
 *.key
 *.key.pub.bak
 public/private/
+src-tauri/shell-bin/
+src-tauri/shellext/target/

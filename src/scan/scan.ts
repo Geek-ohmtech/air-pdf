@@ -72,16 +72,54 @@ export function detectQuad(c: HTMLCanvasElement): Quad {
   const mask = new Uint8Array(sw * sh); for (let i = 0; i < g.length; i++) mask[i] = g[i] > th ? 1 : 0;
   // 종이 밖 = 그림 가장자리에서 이어진 어두운 곳. 나머지(글자·표 테두리 포함)는 모두 종이로 본다
   // (밝은 덩어리만 찾으면 굵은 표 테두리 안쪽만 종이로 잘못 잡는다)
+  const g0 = grayOf(sg.getImageData(0, 0, sw, sh).data, sw * sh);
   const bgm = new Uint8Array(sw * sh); const stack: number[] = [];
-  const push = (p: number) => { if (!mask[p] && !bgm[p]) { bgm[p] = 1; stack.push(p); } };
-  for (let x = 0; x < sw; x++) { push(x); push((sh - 1) * sw + x); }
-  for (let y = 0; y < sh; y++) { push(y * sw); push(y * sw + sw - 1); }
-  let bgN = 0;
-  while (stack.length) {
-    const p = stack.pop()!; bgN++;
-    const x = p % sw, y = (p / sw) | 0;
-    if (x > 0) push(p - 1); if (x < sw - 1) push(p + 1); if (y > 0) push(p - sw); if (y < sh - 1) push(p + sw);
+  // 가장자리에서 이어진 어두운 덩어리마다: 종이와 맞닿은 경계가 흐릿하게 번지면(그늘) 종이로 되돌린다.
+  // 진짜 종이 테두리는 몇 픽셀 안에서 밝기가 확 바뀌고, 그늘은 넓게 서서히 바뀐다
+  const comp: number[] = [];
+  const grow = (seed: number) => {
+    if (mask[seed] || bgm[seed]) return;
+    comp.length = 0; bgm[seed] = 1; stack.push(seed);
+    while (stack.length) {
+      const p = stack.pop()!; comp.push(p);
+      const x = p % sw, y = (p / sw) | 0;
+      const nb = [x > 0 ? p - 1 : -1, x < sw - 1 ? p + 1 : -1, y > 0 ? p - sw : -1, y < sh - 1 ? p + sw : -1];
+      for (const q of nb) if (q >= 0 && !mask[q] && !bgm[q]) { bgm[q] = 1; stack.push(q); }
+    }
+    let soft = 0, sharp = 0;
+    const at = (x: number, y: number) => g0[Math.max(0, Math.min(sh - 1, y)) * sw + Math.max(0, Math.min(sw - 1, x))];
+    for (const p of comp) {
+      const x = p % sw, y = (p / sw) | 0;
+      for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+        const xx = x + dx, yy = y + dy; if (xx < 0 || yy < 0 || xx >= sw || yy >= sh || !mask[yy * sw + xx]) continue;
+        const wide = at(x + dx * 7, y + dy * 7) - at(x - dx * 6, y - dy * 6); if (wide < 18) continue;
+        const local = at(x + dx * 2, y + dy * 2) - at(x - dx, y - dy);
+        if (local / wide < 0.5) soft++; else sharp++;
+      }
+    }
+    if (!(soft + sharp > 10 && soft > sharp * 1.5)) return;
+    // 그늘이다: 그 안에서 다시 나눠 본다 (그늘진 책상과 그늘진 종이). 차이가 작으면 모두 종이
+    const part = Float32Array.from(comp, p => g[p]), t2 = otsu(part);
+    let a = 0, an = 0, b = 0, bn = 0; for (const v of part) if (v > t2) { a += v; an++; } else { b += v; bn++; }
+    const split = an > comp.length * 0.1 && bn > comp.length * 0.1 && a / an > (b / bn) * 1.12;
+    for (const p of comp) { bgm[p] = 0; mask[p] = split && g[p] <= t2 ? 0 : 1; }
+    if (split) again.push(...comp);
+  };
+  const again: number[] = [];
+  for (let x = 0; x < sw; x++) { grow(x); grow((sh - 1) * sw + x); }
+  for (let y = 0; y < sh; y++) { grow(y * sw); grow(y * sw + sw - 1); }
+  // 다시 나눈 곳: 가장자리에서 이어진 어두운 부분만 바깥으로 (한 번만, 그늘 검사 없이)
+  if (again.length) {
+    const inA = new Uint8Array(sw * sh); for (const p of again) inA[p] = 1;
+    const seed = (p: number) => { if (inA[p] && !mask[p] && !bgm[p]) { bgm[p] = 1; stack.push(p); } };
+    for (let x = 0; x < sw; x++) { seed(x); seed((sh - 1) * sw + x); }
+    for (let y = 0; y < sh; y++) { seed(y * sw); seed(y * sw + sw - 1); }
+    while (stack.length) {
+      const p = stack.pop()!, x = p % sw, y = (p / sw) | 0;
+      if (x > 0) seed(p - 1); if (x < sw - 1) seed(p + 1); if (y > 0) seed(p - sw); if (y < sh - 1) seed(p + sw);
+    }
   }
+  let bgN = 0; for (let i = 0; i < bgm.length; i++) bgN += bgm[i];
   if (bgN < sw * sh * 0.03) return full; // 종이가 그림을 거의 다 채움 (이미 잘린 스캔)
   // 종이 영역에서 가장 큰 덩어리 (잡티 빼기)
   const lab = new Int32Array(sw * sh); let best = 0, bestN = 0, id = 0;
@@ -217,33 +255,32 @@ export function enhance(c: HTMLCanvasElement, mode: Mode, clean = true) {
   // 바탕 밝기: 작게 줄여서 크게 흐린 뒤 다시 키워 쓴다 (글자는 사라지고 조명만 남음)
   const f = Math.max(1, Math.round(Math.max(W, H) / 320));
   const sw = Math.ceil(W / f), sh = Math.ceil(H / f);
-  const small = new Float32Array(sw * sh);
+  const small = new Float32Array(sw * sh), sR = new Float32Array(sw * sh), sG = new Float32Array(sw * sh), sB = new Float32Array(sw * sh);
   for (let y = 0; y < sh; y++) for (let x = 0; x < sw; x++) {
-    // 칸 안에서 가장 밝은 페이지(종이)을 쓴다
-    let m = 0;
-    for (let yy = y * f; yy < Math.min(H, y * f + f); yy += Math.max(1, f >> 1)) for (let xx = x * f; xx < Math.min(W, x * f + f); xx += Math.max(1, f >> 1)) { const j = (yy * W + xx) * 4; const v = d[j] * 0.299 + d[j + 1] * 0.587 + d[j + 2] * 0.114; if (v > m) m = v; }
-    small[y * sw + x] = m;
+    // 칸 안에서 가장 밝은 점(종이)을 쓴다. 그 점의 색은 그 자리 종이 색
+    let m = 0, mj = 0;
+    for (let yy = y * f; yy < Math.min(H, y * f + f); yy += Math.max(1, f >> 1)) for (let xx = x * f; xx < Math.min(W, x * f + f); xx += Math.max(1, f >> 1)) { const j = (yy * W + xx) * 4; const v = d[j] * 0.299 + d[j + 1] * 0.587 + d[j + 2] * 0.114; if (v > m) { m = v; mj = j; } }
+    const c = y * sw + x; small[c] = m; sR[c] = d[mj]; sG[c] = d[mj + 1]; sB[c] = d[mj + 2];
   }
-  let bg = boxBlur(small, sw, sh, 6); bg = boxBlur(bg, sw, sh, 6);
-  const bgAt = (x: number, y: number) => {
+  const blur2 = (a: Float32Array) => boxBlur(boxBlur(a, sw, sh, 6), sw, sh, 6);
+  const bg = blur2(small), bR = blur2(sR), bG = blur2(sG), bB = blur2(sB);
+  const lerp = (a: Float32Array, x: number, y: number) => {
     const fx = Math.min(sw - 1.001, Math.max(0, x / f - 0.5)), fy = Math.min(sh - 1.001, Math.max(0, y / f - 0.5));
     const x0 = fx | 0, y0 = fy | 0, ax = fx - x0, ay = fy - y0;
-    return Math.max(30, (bg[y0 * sw + x0] * (1 - ax) + bg[y0 * sw + x0 + 1] * ax) * (1 - ay) + (bg[(y0 + 1) * sw + x0] * (1 - ax) + bg[(y0 + 1) * sw + x0 + 1] * ax) * ay);
+    return (a[y0 * sw + x0] * (1 - ax) + a[y0 * sw + x0 + 1] * ax) * (1 - ay) + (a[(y0 + 1) * sw + x0] * (1 - ax) + a[(y0 + 1) * sw + x0 + 1] * ax) * ay;
   };
+  const bgAt = (x: number, y: number) => Math.max(30, lerp(bg, x, y));
   const out = new Float32Array(n);
-  // 워터마크: 바탕보다 조금 어둡고 색이 살짝 도는(분홍·회분홍) 점은 바탕으로 본다.
-  // 글자(검정)는 색이 없고, 도장·서명은 훨씬 어둡거나 색이 진해서 남는다
-  const bgR = new Float32Array(3); let bgN = 0;
-  for (let i = 0; i < n; i += 13) { const j = i * 4, v = d[j] * 0.299 + d[j + 1] * 0.587 + d[j + 2] * 0.114; if (v > 200) { bgR[0] += d[j]; bgR[1] += d[j + 1]; bgR[2] += d[j + 2]; bgN++; } }
-  const paperTint = bgN ? [bgR[0] / bgN, bgR[1] / bgN, bgR[2] / bgN] : [255, 255, 255];
+  // 워터마크: 바탕보다 조금 어둡고 색이 살짝 도는(분홍·회분홍) 밝은 점은 바탕으로 본다.
+  // 색은 그 자리 종이 색과 견준다 (사진은 곳마다 종이가 푸르거나 누렇다). 글자(검정)는 색이 없고,
+  // 파란 펜은 파란 쪽이라서, 도장·서명은 더 어둡거나 색이 진해서 남는다
   for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
     const i = y * W + x, j = i * 4, b = bgAt(x, y);
     let v = Math.min(255, (d[j] * 0.299 + d[j + 1] * 0.587 + d[j + 2] * 0.114) / b * 255);
-    if (clean && v > 120 && v < 235) {
-      // 종이 색을 뺀 뒤에 남는 색 (종이가 누렇거나 푸른 것은 색으로 치지 않는다)
-      const r = d[j] / paperTint[0], g = d[j + 1] / paperTint[1], bl = d[j + 2] / paperTint[2];
+    if (clean && v > 170 && v < 238) {
+      const r = d[j] / Math.max(30, lerp(bR, x, y)), g = d[j + 1] / Math.max(30, lerp(bG, x, y)), bl = d[j + 2] / Math.max(30, lerp(bB, x, y));
       const chroma = (Math.max(r, g, bl) - Math.min(r, g, bl)) * 255;
-      if (chroma > 9 && chroma < 70 && v > 140) v = 255;
+      if (chroma > 9 && chroma < 55 && r >= bl) v = 255;
     }
     out[i] = v;
     if (mode === 'color') { const k = 255 / b; d[j] = Math.min(255, d[j] * k); d[j + 1] = Math.min(255, d[j + 1] * k); d[j + 2] = Math.min(255, d[j + 2] * k); if (v === 255) { d[j] = d[j + 1] = d[j + 2] = 255; } }
@@ -259,16 +296,21 @@ export function enhance(c: HTMLCanvasElement, mode: Mode, clean = true) {
   }
   // 대비: 어두운 페이지 1%를 검정으로, 바탕을 흰색으로
   const hist = new Uint32Array(256); for (const v of out) hist[v | 0]++;
-  let lo = 0, acc = 0; while (lo < 200 && (acc += hist[lo]) < n * 0.01) lo++;
+  let lo = 0, acc = 0; while (lo < 150 && (acc += hist[lo]) < n * 0.01) lo++;
   // 흐린 무늬 지우기(clean): 바탕 쪽 문턱을 낮춰 옅은 회색·분홍 워터마크가 흰 바탕이 되게, 글자는 더 진하게
   // 바탕으로 칠할 문턱: 글자가 얼마나 진한지(lo)에 맞춘다. 진한 글자 문서는 옅은 무늬를 더 많이 지운다
-  const hi = clean ? Math.max(172, Math.min(212, lo + (255 - lo) * 0.62)) : 236, span = Math.max(30, hi - lo), gam = clean ? 1.3 : 1.15;
+  // 글자가 옅은 사진(lo가 높음)은 옅은 글자까지 지워지지 않게 문턱을 종이 밝기 가까이로 올린다
+  let med = 0; acc = 0; while (med < 255 && (acc += hist[med]) < n * 0.5) med++;
+  const base = Math.max(172, Math.min(212, lo + (255 - lo) * 0.62)), weak = Math.max(0, Math.min(1, (lo - 80) / 50));
+  const hi = clean ? base * (1 - weak) + Math.max(base, med - 18) * weak : 236, span = Math.max(30, hi - lo), gam = clean ? 1.3 : 1.15;
   const curve = (v: number) => { const t = Math.max(0, Math.min(1, (v - lo) / span)); return 255 * Math.pow(t, gam); };
   // 글자 또렷하게 (언샤프 마스크)
   if (mode !== 'bw') { const bl = boxBlur(out, W, H, 1); for (let i = 0; i < n; i++) out[i] = Math.max(0, Math.min(255, out[i] + (out[i] - bl[i]) * 0.7)); }
   if (mode === 'bw') {
     // 문턱값을 조금 낮춰 옅은 바탕무늬(워터마크)는 흰색으로, 남은 점은 지운다
-    const th = Math.min(165, Math.max(105, otsu(out) - 6));
+    // 대비를 먼저 늘린 뒤에 나눈다 (옅은 글자 사진도 글자가 남게)
+    for (let i = 0; i < n; i++) out[i] = curve(out[i]);
+    const th = Math.min(200, Math.max(105, otsu(out) - 6));
     const bin = new Uint8Array(n); for (let i = 0; i < n; i++) bin[i] = out[i] < th ? 1 : 0;
     for (let y = 1; y < H - 1; y++) for (let x = 1; x < W - 1; x++) {
       const i = y * W + x; if (!bin[i]) continue;

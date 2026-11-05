@@ -7,7 +7,10 @@ export type Tab = 'thumbs' | 'outline' | 'search' | 'annots';
 
 export class Sidebar {
   el: HTMLElement;
-  private tabs: HTMLElement; private body: HTMLElement;
+  /** 왼쪽 가장자리의 얇은 줄: 누르면 그 패널이 열리고, 열린 것을 다시 누르면 닫힌다 */
+  rail: HTMLElement;
+  private tabs: HTMLElement; private body: HTMLElement; private headTitle: HTMLElement;
+  onToggle: (shown: boolean) => void = () => {};
   panels = new Map<Tab, HTMLElement>();
   tab: Tab = 'thumbs';
   view: DocView;
@@ -33,10 +36,15 @@ export class Sidebar {
 
   constructor(parent: HTMLElement, view: DocView) {
     this.view = view;
-    this.tabs = h('div', { class: 'side-tabs', role: 'tablist' });
+    this.tabs = h('div', { class: 'rail-tabs', role: 'tablist', 'aria-orientation': 'vertical' });
+    this.rail = h('nav', { class: 'side-rail needs-doc', 'aria-label': '탐색 패널' }, this.tabs);
     this.body = h('div', { class: 'side-body' });
-    this.el = h('aside', { class: 'sidebar', 'aria-label': '탐색 패널' }, this.tabs, this.body);
+    this.headTitle = h('span', { class: 'side-title' });
+    this.el = h('aside', { class: 'sidebar', 'aria-label': '탐색 패널' },
+      h('div', { class: 'side-head' }, this.headTitle, h('button', { class: 'side-close', type: 'button', title: '패널 닫기 (F12)', 'aria-label': '패널 닫기', onclick: () => this.close() }, icon('close'))),
+      this.body);
     parent.prepend(this.el);
+    parent.prepend(this.rail);
     this.thumbList = h('div', { class: 'thumbs', tabindex: '0', 'aria-label': '페이지 목록. 끌어서 순서 바꾸기, Delete로 삭제, 다른 PDF를 끌어 놓아 삽입' });
     // 페이지 목록 위: 1열/2열, 페이지 구성 보기
     try { this.cols = localStorage.getItem('airpdf.thumbCols') === '2' ? 2 : 1; } catch { /* */ }
@@ -48,15 +56,17 @@ export class Sidebar {
     this.addPanel('outline', '목차', 'outline', h('div', { class: 'outline' }, h('p', { class: 'empty' }, '목차가 없는 문서입니다.')));
     this.searchHead = h('div', { class: 'search-head' });
     this.searchList = h('div', { class: 'search-list' });
-    this.addPanel('search', '검색', 'search', h('div', {}, this.searchHead, this.searchList));
+    this.addPanel('search', '찾기 결과', 'search', h('div', {}, this.searchHead, this.searchList), '찾기');
+    // 목차·찾기 결과는 쓸 것이 있을 때만 보인다
+    this.setTabVisible('outline', false); this.setTabVisible('search', false);
     this.thumbObs = new IntersectionObserver(es => {
       for (const en of es) if (en.isIntersecting) this.renderThumb(en.target as HTMLElement);
     }, { root: this.body, rootMargin: '300px 0px' });
     this.show('thumbs');
     this.bindThumbs();
   }
-  addPanel(tab: Tab, label: string, ic: IconName, content: HTMLElement) {
-    const b = h('button', { class: 'side-tab', role: 'tab', type: 'button', title: label, dataset: { tab }, onclick: () => this.show(tab) }, icon(ic), h('span', {}, label));
+  addPanel(tab: Tab, label: string, ic: IconName, content: HTMLElement, short = label) {
+    const b = h('button', { class: 'side-tab', role: 'tab', type: 'button', title: label, 'aria-label': label, dataset: { tab, label }, onclick: () => this.clickTab(tab) }, icon(ic), h('span', { class: 'rail-lbl' }, short));
     this.tabs.append(b);
     const panel = h('div', { class: 'side-panel', role: 'tabpanel', hidden: true }, content);
     this.body.append(panel); this.panels.set(tab, panel);
@@ -64,9 +74,24 @@ export class Sidebar {
   }
   removePanel(tab: Tab) { this.panels.get(tab)?.remove(); this.panels.delete(tab); this.tabs.querySelector(`[data-tab="${tab}"]`)?.remove(); if (this.tab === tab) this.show('thumbs'); }
   show(tab: Tab) {
+    if (!this.panels.has(tab)) tab = 'thumbs';
     this.tab = tab;
+    this.setTabVisible(tab, true);
     for (const [t, p] of this.panels) p.hidden = t !== tab;
-    this.tabs.querySelectorAll('.side-tab').forEach(b => b.setAttribute('aria-selected', String((b as HTMLElement).dataset.tab === tab)));
+    const b = this.tabs.querySelector(`[data-tab="${tab}"]`) as HTMLElement | null;
+    this.headTitle.textContent = b?.dataset.label || '';
+    this.paintTabs();
+  }
+  private paintTabs() { this.tabs.querySelectorAll('.side-tab').forEach(b => b.setAttribute('aria-selected', String(!this.el.hidden && (b as HTMLElement).dataset.tab === this.tab))); }
+  /** 레일 단추: 닫혀 있으면 열고, 이미 보고 있는 것이면 닫는다 */
+  clickTab(tab: Tab) { if (!this.el.hidden && this.tab === tab) this.close(); else { this.show(tab); this.open(); } }
+  open() { if (!this.el.hidden) return; this.el.hidden = false; this.paintTabs(); this.markCurrent(this.view.current); this.onToggle(true); }
+  close() { if (this.el.hidden) return; this.el.hidden = true; this.paintTabs(); this.onToggle(false); }
+  toggle() { this.el.hidden ? this.open() : this.close(); }
+  get shown() { return !this.el.hidden; }
+  setTabVisible(tab: Tab, on: boolean) {
+    const b = this.tabs.querySelector(`[data-tab="${tab}"]`) as HTMLElement | null; if (b) b.hidden = !on;
+    if (!on && this.tab === tab) this.show('thumbs');
   }
 
   /* ───────────── 페이지 그림 ───────────── */
@@ -192,7 +217,7 @@ export class Sidebar {
       const i = +it.dataset.i!, key = +it.dataset.key!;
       if (this.editable && (e.ctrlKey || e.metaKey)) { this.selected.has(key) ? this.selected.delete(key) : this.selected.add(key); this.anchor = i; }
       else if (this.editable && e.shiftKey && this.anchor >= 0) { const a = Math.min(this.anchor, this.view.pages.length - 1); this.selected.clear(); for (let k = Math.min(a, i); k <= Math.max(a, i); k++) this.selected.add(this.view.pages[k].key); }
-      else { this.selected.clear(); this.selected.add(key); this.anchor = i; this.view.scrollToPage(i); if (innerWidth < 860) this.el.hidden = true; }
+      else { this.selected.clear(); this.selected.add(key); this.anchor = i; this.view.scrollToPage(i); if (innerWidth < 860) this.close(); }
       this.paintPicked();
       this.thumbList.focus({ preventScroll: true });
     });
@@ -260,6 +285,7 @@ export class Sidebar {
   setOutline(items: OutlineItem[]) {
     const box = this.panels.get('outline')!.firstElementChild as HTMLElement;
     box.innerHTML = '';
+    this.setTabVisible('outline', items.length > 0);
     if (!items.length) { box.append(h('p', { class: 'empty' }, '목차가 없는 문서입니다.')); return; }
     const build = (list: OutlineItem[], depth: number): HTMLElement => h('ul', { class: 'ol-list', role: depth ? 'group' : 'tree' }, ...list.map(it => {
       const kids = it.children.length ? build(it.children, depth + 1) : null;
@@ -280,6 +306,7 @@ export class Sidebar {
     this.searchHead.innerHTML = `<span class="spin sm"></span> “${esc(q)}” 찾는 중…`;
     this.searchList.innerHTML = '';
     this.show('search');
+    this.open();
   }
   searchAdd(hits: SearchHit[], startIndex: number) {
     if (!hits.length) return;

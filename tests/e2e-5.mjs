@@ -18,7 +18,7 @@ await page.goto(base + '?file=fixtures/payslip.pdf');
 await page.waitForFunction(() => window.__app?.doc && document.querySelector('.page canvas.pg-base')?.width > 10, null, { timeout: 20000 });
 await page.click('.mode-b[data-m="edit"]'); await page.waitForSelector('.ribbon .rt');
 await ev(() => { window.__app.setFit('page'); window.__app.view.scrollToPage(0); }); await page.waitForTimeout(600);
-const pg = await page.locator('.page').first().boundingBox(); const z = await ev(() => window.__app.view.zoom);
+const pg = await page.locator('.page[data-i="0"]').boundingBox(); const z = await ev(() => window.__app.view.zoom);
 const at = (x, y) => [pg.x + x * z, pg.y + y * z];
 const runs = await ev(async () => window.__app.engine.call('textRuns', [window.__app.doc.id, window.__app.view.pages[0].key]));
 const rNum = runs.find(r => r.text === '196,520');

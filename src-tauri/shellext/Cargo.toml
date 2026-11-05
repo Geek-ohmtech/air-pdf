@@ -1,0 +1,33 @@
+# 탐색기 PDF 미리보기 창·미리보기 그림 (Windows 셸 확장 DLL)
+# Windows에 들어 있는 PDF 그리기(Windows.Data.Pdf)를 써서 따로 엔진을 넣지 않는다.
+[package]
+name = "airpdf-shell"
+version = "0.8.0"
+edition = "2021"
+license = "MIT"
+publish = false
+
+[lib]
+name = "airpdf_shell"
+crate-type = ["cdylib"]
+
+[dependencies.windows]
+version = "0.62"
+features = [
+  "Foundation", "Data_Pdf", "Storage_Streams", "Graphics_Imaging",
+  "Win32_Foundation", "Win32_System_Com", "Win32_System_Ole", "Win32_System_LibraryLoader", "Win32_System_SystemServices",
+  "Win32_UI_Shell", "Win32_UI_Shell_PropertiesSystem", "Win32_UI_WindowsAndMessaging", "Win32_UI_Input_KeyboardAndMouse",
+  "Win32_Graphics_Gdi", "Win32_System_Threading", "Win32_System_Registry", "Win32_System_SystemInformation", "Win32_Security",
+]
+
+[dependencies.windows-core]
+version = "0.62"
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+panic = "abort"
+strip = true
+
+[workspace]

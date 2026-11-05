@@ -81,6 +81,10 @@ export function createDesktop(): Platform {
       status: () => invoke<boolean | null>('default_app_status'),
       make: () => invoke('make_default_app'),
     },
+    ...(navigator.userAgent.includes('Windows') ? { printer: {
+      status: () => invoke<{ supported: boolean; installed: boolean }>('printer_status'),
+      set: (on: boolean) => invoke<boolean>('printer_set', { on }),
+    } } : {}),
     version: () => getVersion(),
     tabs: {
       label: getCurrentWebviewWindow().label,
@@ -120,10 +124,14 @@ export function createDesktop(): Platform {
       };
     },
     readPath,
-    recent() { try { return JSON.parse(localStorage.getItem(RECENT) || '[]'); } catch { return []; } },
-    addRecent(path) {
-      try { const l = p.recent().filter(x => x !== path); l.unshift(path); localStorage.setItem(RECENT, JSON.stringify(l.slice(0, 12))); } catch { /* */ }
+    recent() {
+      // 예전에는 경로만 적어 두었다 → 연 때를 모르면 지금으로 친다
+      try { const now = Date.now(); return (JSON.parse(localStorage.getItem(RECENT) || '[]') as any[]).map(x => typeof x === 'string' ? { path: x, at: now } : x).filter(x => x && x.path); } catch { return []; }
     },
+    addRecent(path) {
+      try { const l = p.recent().filter(x => x.path.toLowerCase() !== path.toLowerCase()); l.unshift({ path, at: Date.now() }); p.setRecent(l); } catch { /* */ }
+    },
+    setRecent(list) { try { localStorage.setItem(RECENT, JSON.stringify(list.slice(0, 2000))); } catch { /* */ } },
     setTitle(t) { win.setTitle(t); },
     openUrl(url) { openUrl(url); },
     onCloseRequest(cb) {

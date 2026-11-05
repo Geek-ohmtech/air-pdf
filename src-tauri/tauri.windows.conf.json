@@ -1,0 +1,10 @@
+{
+  "build": {
+    "beforeBuildCommand": "npm run build && node scripts/build-shellext.mjs"
+  },
+  "bundle": {
+    "resources": {
+      "shell-bin/airpdf_shell.dll.bin": "airpdf_shell.dll.bin"
+    }
+  }
+}

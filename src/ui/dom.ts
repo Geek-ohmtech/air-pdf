@@ -74,6 +74,7 @@ export const icons = {
   keyboard: P('<rect x="2" y="5" width="16" height="10" rx="1.5"/><path d="M5 8.5h.5M8 8.5h.5M11 8.5h.5M14 8.5h.5M6 12h8"/>'),
   copy: P('<rect x="6.5" y="6.5" width="10" height="10" rx="1.2"/><path d="M13.5 6.5V3.5h-10v10h3"/>'),
   thumbs: P('<rect x="3" y="3" width="5.5" height="6.5" rx=".8"/><rect x="11.5" y="3" width="5.5" height="6.5" rx=".8"/><rect x="3" y="12" width="5.5" height="5" rx=".8"/><rect x="11.5" y="12" width="5.5" height="5" rx=".8"/>'),
+  recent: P('<circle cx="10" cy="10" r="7.5"/><path d="M10 5.5V10l3 2"/>'),
   outline: P('<path d="M3 5h2M3 10h2M3 15h2M8 5h9M10 10h7M10 15h7"/>'),
   comments: P('<path d="M3 4h14v9.5H9l-4 3v-3H3z"/>'),
   theme: P('<circle cx="10" cy="10" r="7"/><path d="M10 3v14a7 7 0 000-14z" fill="currentColor"/>'),

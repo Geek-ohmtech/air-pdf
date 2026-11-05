@@ -52,7 +52,7 @@ await page.mouse.click(700, 400);
 await page.keyboard.press('t');
 ok(await page.locator('.rt[data-tool="addText"][aria-pressed="true"]').count() === 1, 'T로 글자 넣기 도구');
 
-const pg = await page.locator('.page').first().boundingBox();
+const pg = await page.locator('.page[data-i="0"]').boundingBox();
 const z = await ev(() => window.__app.view.zoom);
 const at = (x, y) => [pg.x + x * z, pg.y + y * z];
 

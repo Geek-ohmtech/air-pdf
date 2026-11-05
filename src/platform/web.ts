@@ -79,7 +79,7 @@ export function createWeb(): Platform {
     },
     onExternalOpen() { /* 웹: 끌어다 놓기는 화면에서 처리 */ },
     async readPath(): Promise<OpenedFile> { throw new Error('웹에서는 경로로 열 수 없습니다'); },
-    recent: () => [], addRecent() {},
+    recent: () => [], addRecent() {}, setRecent() {},
     setTitle(t) { document.title = t; },
     openUrl(url) { window.open(url, '_blank', 'noopener'); },
     onCloseRequest() {

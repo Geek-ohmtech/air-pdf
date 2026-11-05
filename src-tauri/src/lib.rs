@@ -280,29 +280,69 @@ mod winassoc {
         ra.set_value("AirPDF", &r"Software\AirPDF\Capabilities")?;
         Ok(())
     }
-    /// 탐색기 미리보기 창·미리보기 그림: 이 컴퓨터에 있는 PDF 미리보기(보통 Edge)를 Air PDF 파일 형식에도 붙인다.
-    /// 기본 프로그램을 Air PDF로 바꾸면 Windows가 Air PDF 쪽 등록만 보고 미리보기를 못 찾는 일을 막는다.
-    pub fn ensure_preview() {
-        const HANDLERS: [&str; 2] = [
-            "{8895b1c6-b41f-4c1c-a562-0d564250836f}", // 미리보기 창 (IPreviewHandler)
-            "{e357fccd-a995-4576-b01f-234630154e96}", // 미리보기 그림 (IThumbnailProvider)
-        ];
-        let hkcr = RegKey::predef(HKEY_CLASSES_ROOT);
+    const THUMB_IF: &str = "{e357fccd-a995-4576-b01f-234630154e96}"; // 미리보기 그림 (IThumbnailProvider)
+    const PREVIEW_IF: &str = "{8895b1c6-b41f-4c1c-a562-0d564250836f}"; // 미리보기 창 (IPreviewHandler)
+    const CLSID_THUMB: &str = "{30dd72b6-7cfd-4770-8d95-ab22c7254d79}";
+    const CLSID_PREVIEW: &str = "{20e51188-78a0-4aee-8fd1-f5f0d37f0c55}";
+    /// 미리보기 창을 띄워 주는 Windows 대리 프로그램(prevhost.exe)
+    const PREVHOST_APPID: &str = "{6d2b5079-2f0b-48dd-ab7f-97cec514d30b}";
+    /// PDF가 붙는 곳들: 확장자, Air PDF 파일 형식, 모든 PDF 공통
+    const TARGETS: [&str; 3] = [r"Software\Classes\.pdf", r"Software\Classes\AirPDF.Document", r"Software\Classes\SystemFileAssociations\.pdf"];
+
+    /// 설치 폴더의 셸 확장 DLL (판마다 새 이름: 탐색기가 쓰는 중이면 덮어쓸 수 없어서)
+    pub fn shell_dll() -> Option<std::path::PathBuf> {
+        let dir = std::env::current_exe().ok()?.parent()?.join("shell");
+        let mut v: Vec<_> = std::fs::read_dir(&dir).ok()?.flatten().map(|e| e.path())
+            .filter(|p| p.extension().map(|e| e.eq_ignore_ascii_case("dll")).unwrap_or(false)).collect();
+        v.sort_by_key(|p| std::fs::metadata(p).and_then(|m| m.modified()).ok());
+        v.pop()
+    }
+    /// 탐색기 미리보기 창·미리보기 그림을 Air PDF 확장으로 등록 (사용자 범위, 관리자 권한 필요 없음)
+    pub fn register_shell(dll: &std::path::Path) -> std::io::Result<()> {
         let hkcu = RegKey::predef(HKEY_CURRENT_USER);
-        // 찾아볼 곳: 확장자, Edge, 아크로뱃, 그리고 .pdf를 열 수 있다고 등록한 다른 프로그램들
-        let mut sources: Vec<String> = vec![".pdf".into(), "SystemFileAssociations\\.pdf".into(), "MSEdgePDF".into(), "AcroExch.Document.DC".into(), "AcroExch.Document".into()];
-        if let Ok(k) = hkcr.open_subkey(".pdf\\OpenWithProgids") {
-            for (name, _) in k.enum_values().flatten() { if name != PROGID { sources.push(name); } }
+        let path = dll.to_string_lossy().into_owned();
+        for (clsid, name) in [(CLSID_THUMB, "Air PDF 미리보기 그림"), (CLSID_PREVIEW, "Air PDF 미리보기")] {
+            let (k, _) = hkcu.create_subkey(format!(r"Software\Classes\CLSID\{clsid}"))?;
+            k.set_value("", &name)?;
+            k.set_value("DisplayName", &name)?;
+            if clsid == CLSID_PREVIEW { k.set_value("AppID", &PREVHOST_APPID)?; }
+            let (ip, _) = k.create_subkey("InprocServer32")?;
+            ip.set_value("", &path)?;
+            ip.set_value("ThreadingModel", &"Apartment")?;
         }
-        if let Ok(pid) = hkcr.open_subkey(".pdf").and_then(|k| k.get_value::<String, _>("")) { if pid != PROGID { sources.push(pid); } }
-        for h in HANDLERS {
-            let target = format!(r"Software\Classes\{PROGID}\shellex\{h}");
-            if hkcu.open_subkey(&target).and_then(|k| k.get_value::<String, _>("")).map(|v| !v.is_empty()).unwrap_or(false) { continue; }
-            let found = sources.iter().find_map(|src| hkcr.open_subkey(format!(r"{src}\shellex\{h}")).and_then(|k| k.get_value::<String, _>("")).ok().filter(|v| !v.is_empty()));
-            if let Some(clsid) = found {
-                if let Ok((k, _)) = hkcu.create_subkey(&target) { let _ = k.set_value("", &clsid); }
+        let (ph, _) = hkcu.create_subkey(r"Software\Microsoft\Windows\CurrentVersion\PreviewHandlers")?;
+        ph.set_value(CLSID_PREVIEW, &"Air PDF 미리보기")?;
+        for t in TARGETS {
+            let (a, _) = hkcu.create_subkey(format!(r"{t}\ShellEx\{THUMB_IF}"))?;
+            a.set_value("", &CLSID_THUMB)?;
+            let (b, _) = hkcu.create_subkey(format!(r"{t}\ShellEx\{PREVIEW_IF}"))?;
+            b.set_value("", &CLSID_PREVIEW)?;
+        }
+        // 미리보기 그림 귀퉁이에 프로그램 아이콘을 겹쳐 그리지 않게
+        if let Ok((k, _)) = hkcu.create_subkey(r"Software\Classes\AirPDF.Document") { let _ = k.set_value("TypeOverlay", &""); }
+        unsafe { super::SHChangeNotify(0x0800_0000, 0, std::ptr::null(), std::ptr::null()) };
+        Ok(())
+    }
+    pub fn unregister_shell() {
+        let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+        for c in [CLSID_THUMB, CLSID_PREVIEW] { let _ = hkcu.delete_subkey_all(format!(r"Software\Classes\CLSID\{c}")); }
+        if let Ok(k) = hkcu.open_subkey_with_flags(r"Software\Microsoft\Windows\CurrentVersion\PreviewHandlers", KEY_SET_VALUE) { let _ = k.delete_value(CLSID_PREVIEW); }
+        for t in TARGETS {
+            for (i, c) in [(THUMB_IF, CLSID_THUMB), (PREVIEW_IF, CLSID_PREVIEW)] {
+                let key = format!(r"{t}\ShellEx\{i}");
+                // 우리 것일 때만 지운다
+                if hkcu.open_subkey(&key).and_then(|k| k.get_value::<String, _>("")).map(|v| v.eq_ignore_ascii_case(c)).unwrap_or(false) { let _ = hkcu.delete_subkey_all(&key); }
             }
         }
+        unsafe { super::SHChangeNotify(0x0800_0000, 0, std::ptr::null(), std::ptr::null()) };
+    }
+    /// 켤 때마다: 등록이 빠졌거나 옛 DLL을 가리키면 바로잡는다
+    pub fn ensure_preview() {
+        let Some(dll) = shell_dll() else { return };
+        let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+        let cur = hkcu.open_subkey(format!(r"Software\Classes\CLSID\{CLSID_PREVIEW}\InprocServer32")).and_then(|k| k.get_value::<String, _>("")).unwrap_or_default();
+        let linked = TARGETS.iter().all(|t| hkcu.open_subkey(format!(r"{t}\ShellEx\{THUMB_IF}")).and_then(|k| k.get_value::<String, _>("")).map(|v| v.eq_ignore_ascii_case(CLSID_THUMB)).unwrap_or(false));
+        if !linked || !std::path::Path::new(&cur).eq(dll.as_path()) { let _ = register_shell(&dll); }
     }
     pub fn is_default() -> bool {
         let hkcu = RegKey::predef(HKEY_CURRENT_USER);
@@ -311,6 +351,114 @@ mod winassoc {
             .map(|p| p.eq_ignore_ascii_case(PROGID) || p.to_lowercase().contains("airpdf"))
             .unwrap_or(false)
     }
+}
+
+/* ───────────── 'Air PDF' 프린터 (Windows) ───────────── */
+
+#[cfg(windows)]
+mod printer {
+    use winreg::{enums::*, RegKey};
+    pub const NAME: &str = "Air PDF";
+    const RUN: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
+    const RUN_NAME: &str = "AirPDF Print";
+    /// 인쇄 결과가 써지는 곳 (프린터 포트). 인쇄 담당(시스템)도 쓸 수 있어야 해서 ProgramData에 둔다
+    pub fn port() -> String {
+        let pd = std::env::var("ProgramData").unwrap_or_else(|_| r"C:\ProgramData".into());
+        format!(r"{pd}\AirPDF\print\job.pdf")
+    }
+    pub fn installed() -> bool {
+        RegKey::predef(HKEY_LOCAL_MACHINE).open_subkey(format!(r"SYSTEM\CurrentControlSet\Control\Print\Printers\{NAME}")).is_ok()
+    }
+    /// 관리자 권한으로 PowerShell 스크립트를 돌린다 (사용자 계정 컨트롤 창이 한 번 뜬다). 끝날 때까지 기다린다
+    fn elevated(script: &str) -> Result<(), String> {
+        use std::os::windows::process::CommandExt;
+        let dir = std::env::temp_dir().join("airpdf-setup");
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let file = dir.join(format!("printer-{}.ps1", std::process::id()));
+        // PowerShell 5는 BOM이 있어야 한글을 바르게 읽는다
+        let mut body = vec![0xEF, 0xBB, 0xBF];
+        body.extend_from_slice(script.as_bytes());
+        std::fs::write(&file, body).map_err(|e| e.to_string())?;
+        let f = file.to_string_lossy().replace('\'', "''");
+        let cmd = format!("try {{ $p = Start-Process powershell.exe -Verb RunAs -Wait -PassThru -WindowStyle Hidden -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File','\"{f}\"'; exit $p.ExitCode }} catch {{ exit 1223 }}");
+        let st = std::process::Command::new("powershell.exe").args(["-NoProfile", "-WindowStyle", "Hidden", "-Command", &cmd])
+            .creation_flags(0x0800_0000).status().map_err(|e| e.to_string())?;
+        let _ = std::fs::remove_file(&file);
+        match st.code() {
+            Some(0) => Ok(()),
+            Some(1223) => Err("cancelled".into()),
+            Some(c) => Err(format!("프린터 설정이 끝나지 않았습니다 (코드 {c})")),
+            None => Err("프린터 설정이 중단되었습니다".into()),
+        }
+    }
+    pub fn install() -> Result<(), String> {
+        let port = port();
+        let dir = std::path::Path::new(&port).parent().unwrap().to_string_lossy().into_owned();
+        let script = format!(r#"$ErrorActionPreference = 'Stop'
+$name = '{NAME}'; $drv = 'Microsoft Print To PDF'; $port = '{port}'; $dir = '{dir}'
+New-Item -ItemType Directory -Force -Path $dir | Out-Null
+# 모든 사용자(Users)가 인쇄 결과를 옮길 수 있게
+icacls $dir /grant '*S-1-5-32-545:(OI)(CI)M' | Out-Null
+if (-not (Get-PrinterDriver -Name $drv -ErrorAction SilentlyContinue)) {{
+  try {{ Enable-WindowsOptionalFeature -Online -FeatureName 'Printing-PrintToPDFServices-Features' -NoRestart -All | Out-Null }} catch {{}}
+  Add-PrinterDriver -Name $drv
+}}
+if (-not (Get-PrinterPort -Name $port -ErrorAction SilentlyContinue)) {{ Add-PrinterPort -Name $port }}
+if (Get-Printer -Name $name -ErrorAction SilentlyContinue) {{ Remove-Printer -Name $name }}
+Add-Printer -Name $name -DriverName $drv -PortName $port -Comment 'Air PDF로 PDF 만들기 (글자 인식 가능)'
+exit 0
+"#);
+        elevated(&script)?;
+        start_watch();
+        Ok(())
+    }
+    pub fn remove() -> Result<(), String> {
+        let port = port();
+        let script = format!(r#"$name = '{NAME}'; $port = '{port}'
+if (Get-Printer -Name $name -ErrorAction SilentlyContinue) {{ Remove-Printer -Name $name }}
+Start-Sleep -Milliseconds 500
+if (Get-PrinterPort -Name $port -ErrorAction SilentlyContinue) {{ Remove-PrinterPort -Name $port -ErrorAction SilentlyContinue }}
+exit 0
+"#);
+        elevated(&script)?;
+        if let Ok(k) = RegKey::predef(HKEY_CURRENT_USER).open_subkey_with_flags(RUN, KEY_SET_VALUE) { let _ = k.delete_value(RUN_NAME); }
+        Ok(())
+    }
+    /// 인쇄 감시: 로그인할 때 켜지게 등록하고 지금 켠다 (이미 돌고 있으면 그쪽이 계속한다)
+    pub fn start_watch() {
+        use std::os::windows::process::CommandExt;
+        let Some(dll) = super::winassoc::shell_dll() else { return };
+        let sys = std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".into());
+        let rundll = format!(r"{sys}\System32\rundll32.exe");
+        let arg = format!("{},PrintWatch", dll.to_string_lossy());
+        if let Ok((k, _)) = RegKey::predef(HKEY_CURRENT_USER).create_subkey(RUN) { let _ = k.set_value(RUN_NAME, &format!("\"{rundll}\" \"{}\",PrintWatch", dll.to_string_lossy())); }
+        let _ = std::process::Command::new(rundll).arg(arg).creation_flags(0x0800_0000).spawn();
+    }
+}
+
+#[derive(serde::Serialize)]
+struct PrinterInfo { supported: bool, installed: bool }
+
+#[tauri::command]
+fn printer_status() -> PrinterInfo {
+    #[cfg(windows)]
+    return PrinterInfo { supported: winassoc::shell_dll().is_some(), installed: printer::installed() };
+    #[cfg(not(windows))]
+    PrinterInfo { supported: false, installed: false }
+}
+
+/// 'Air PDF' 프린터 추가(on=true)·빼기. 관리자 확인 창이 뜬다. 사용자가 취소하면 "cancelled"
+#[tauri::command]
+async fn printer_set(on: bool) -> Result<bool, String> {
+    #[cfg(windows)]
+    {
+        return tauri::async_runtime::spawn_blocking(move || {
+            if on { printer::install()?; } else { printer::remove()?; }
+            Ok(printer::installed())
+        }).await.map_err(|e| e.to_string())?;
+    }
+    #[cfg(not(windows))]
+    { let _ = on; Err("Windows에서만 됩니다".into()) }
 }
 
 /// 지금 기본 PDF 프로그램인가 (Windows가 아니면 null)
@@ -366,7 +514,7 @@ fn parse_args<I: IntoIterator<Item = String>>(args: I) -> Batch {
     let mut b = Batch::default();
     for a in args {
         if let Some(m) = a.strip_prefix("--") {
-            if ["merge", "split", "to-images", "to-pdf", "batch"].contains(&m) {
+            if ["merge", "split", "to-images", "to-pdf", "batch", "printed"].contains(&m) {
                 b.mode = Some(m.to_owned());
             }
             continue;
@@ -381,6 +529,22 @@ fn parse_args<I: IntoIterator<Item = String>>(args: I) -> Batch {
         b.files.retain(|f| f.to_lowercase().ends_with(".pdf"));
     }
     b
+}
+
+/// 설치·제거 프로그램이 부르는 일: 화면 없이 하고 바로 끝낸다. 했으면 true
+pub fn run_setup_task() -> bool {
+    let args: Vec<String> = std::env::args().collect();
+    match args.get(1).map(|s| s.as_str()) {
+        #[cfg(windows)]
+        Some("--register-shell") => {
+            let dll = args.get(2).map(std::path::PathBuf::from).or_else(winassoc::shell_dll);
+            if let Some(d) = dll { let _ = winassoc::register_shell(&d); }
+            true
+        }
+        #[cfg(windows)]
+        Some("--unregister-shell") => { winassoc::unregister_shell(); true }
+        _ => false,
+    }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -408,7 +572,11 @@ pub fn run() {
         .setup(|_app| {
             // 탐색기 미리보기 연결은 켤 때마다 확인한다 (빠르고, 이미 있으면 건드리지 않음)
             #[cfg(windows)]
-            std::thread::spawn(winassoc::ensure_preview);
+            std::thread::spawn(|| {
+                winassoc::ensure_preview();
+                // 프린터가 있으면 인쇄 감시가 돌고 있게
+                if printer::installed() { printer::start_watch(); }
+            });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -423,7 +591,9 @@ pub fn run() {
             take_transfer,
             window_at,
             send_transfer,
-            new_window
+            new_window,
+            printer_status,
+            printer_set
         ])
         .build(tauri::generate_context!())
         .expect("Air PDF를 시작하지 못했습니다");
