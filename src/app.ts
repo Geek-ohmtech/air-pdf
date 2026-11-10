@@ -38,7 +38,7 @@ export class App {
   private searchInput!: HTMLInputElement; private saveBtn!: HTMLButtonElement; private modeBtns!: HTMLElement;
   private hits: SearchHit[] = []; private hitByPage = new Map<number, SearchHit[]>(); private hitIdx = -1; private lastQuery = '';
   private searchOpts = { matchCase: false, wholeWord: false };
-  prefs: { theme: string; spread: boolean; night: boolean; sidebar: boolean; author: string; shortcuts?: Record<string, string[]>; autoUpdate?: boolean; accent?: string; scanSuggest?: boolean; scanDefault?: { correct: boolean; ocr: boolean }; recent?: { on: boolean; days: number; max: number }; printerAsked?: boolean; print?: { fit: 'fit' | 'actual'; mode: 'normal' | 'fax' } } = { theme: 'system', spread: false, night: false, sidebar: true, author: '' };
+  prefs: { theme: string; spread: boolean; night: boolean; sidebar: boolean; author: string; shortcuts?: Record<string, string[]>; autoUpdate?: boolean; accent?: string; scanSuggest?: boolean; scanDefault?: { correct: boolean; ocr: boolean }; recent?: { on: boolean; days: number; max: number }; printerAsked?: boolean; print?: { fit: 'fit' | 'actual'; color: 'color' | 'gray' | 'bw'; quality: 'std' | 'high' } } = { theme: 'system', spread: false, night: false, sidebar: true, author: '' };
 
   constructor(engine: EngineClient, platform: Platform) {
     this.engine = engine; this.platform = platform;
@@ -963,7 +963,8 @@ export class App {
   async print() {
     const d = this.doc; if (!d) return;
     const n = d.info.pageCount;
-    const P = { fit: 'fit' as 'fit' | 'actual', mode: 'normal' as 'normal' | 'fax', ...this.prefs.print };
+    const old: any = this.prefs.print || {};
+    const P = { fit: (old.fit || 'fit') as 'fit' | 'actual', color: (old.color || (old.mode === 'fax' ? 'bw' : 'color')) as 'color' | 'gray' | 'bw', quality: (old.quality || 'std') as 'std' | 'high' };
     const radio = (name: string, value: string, on: boolean, label: string, sub = '') => h('label', { class: 'chk' }, h('input', { type: 'radio', name, value, checked: on ? '' : undefined }), ' ', label, sub ? h('small', { class: 'hint' }, ' ' + sub) : null);
     const rangeIn = h('input', { class: 'field sm', placeholder: '예: 1-3, 5', 'aria-label': '인쇄할 페이지', style: { width: '140px' } }) as HTMLInputElement;
     const body = h('div', { class: 'form print-opts' },
@@ -972,13 +973,15 @@ export class App {
         h('label', { class: 'chk' }, h('input', { type: 'radio', name: 'pr-range', value: 'some' }), ' 지정 ', rangeIn)),
       h('label', { class: 'lbl' }, '크기'),
       h('div', { class: 'row' }, radio('pr-fit', 'fit', P.fit === 'fit', '용지에 맞추기', '(여백 안에 페이지 전체가 들어가게)'), radio('pr-fit', 'actual', P.fit === 'actual', '실제 크기')),
+      h('label', { class: 'lbl' }, '색상'),
+      h('div', { class: 'row' }, radio('pr-color', 'color', P.color === 'color', '컬러'), radio('pr-color', 'gray', P.color === 'gray', '회색조'), radio('pr-color', 'bw', P.color === 'bw', '흑백')),
       h('label', { class: 'lbl' }, '품질'),
-      h('div', { class: 'row' }, radio('pr-mode', 'normal', P.mode === 'normal', '보통'), radio('pr-mode', 'fax', P.mode === 'fax', '팩스·흑백 프린터용', '(글자를 또렷한 흑백으로)')),
-      h('p', { class: 'hint' }, '팩스(삼성 네트워크 팩스 등)로 보낼 때 글자가 뭉개지면 “팩스·흑백 프린터용”을 고르세요. 가로 페이지는 용지 방향에 맞게 돌려서 인쇄합니다.'));
+      h('div', { class: 'row' }, radio('pr-q', 'std', P.quality === 'std', '표준', '(200dpi)'), radio('pr-q', 'high', P.quality === 'high', '고품질', '(300dpi, 준비가 느림)')),
+      h('p', { class: 'hint' }, '흑백: 글자·선은 또렷한 검정으로, 사진·그림은 신문 사진처럼 망점으로 바꿔 보냅니다. 팩스로 보내거나 흑백으로 복사·인쇄할 때 알맞습니다.'));
     rangeIn.addEventListener('focus', () => ((body.querySelector('input[value="some"]') as HTMLInputElement).checked = true));
     const pick = () => {
       const v = (q: string) => (body.querySelector(`input[name="${q}"]:checked`) as HTMLInputElement).value;
-      return { range: v('pr-range'), fit: v('pr-fit') as 'fit' | 'actual', mode: v('pr-mode') as 'normal' | 'fax', text: rangeIn.value };
+      return { range: v('pr-range'), fit: v('pr-fit') as 'fit' | 'actual', color: v('pr-color') as 'color' | 'gray' | 'bw', quality: v('pr-q') as 'std' | 'high', text: rangeIn.value };
     };
     const r = await dialog({ title: '인쇄', body, buttons: [{ label: '취소', value: false }, { label: '인쇄…', value: true, primary: true }], collect: pick });
     if (!r?.value) return;
@@ -989,7 +992,7 @@ export class App {
       pages = parseRange(o.text, n);
       if (!pages.length) { toast('인쇄할 페이지를 “1-3, 5”처럼 적어 주세요.'); return; }
     } else pages = Array.from({ length: n }, (_, i) => i);
-    this.prefs.print = { fit: o.fit, mode: o.mode }; this.savePrefs();
+    this.prefs.print = { fit: o.fit, color: o.color, quality: o.quality }; this.savePrefs();
     if (pages.length > 60 && !(await confirmBox('인쇄', `${pages.length}페이지를 인쇄용으로 준비합니다. 시간이 조금 걸릴 수 있습니다.`, '계속'))) return;
     const root = await this.preparePrint(pages, o);
     if (!root) return;
@@ -998,8 +1001,8 @@ export class App {
     window.print();
     setTimeout(cleanup, 60_000);
   }
-  /** 인쇄할 그림을 만든다. 보통: 200dpi 컬러, 팩스: 300dpi 흑백(중간 밝기는 점무늬) */
-  async preparePrint(pages: number[], o: { fit: 'fit' | 'actual'; mode: 'normal' | 'fax' }) {
+  /** 인쇄할 그림을 만든다 (표준 200dpi / 고품질 300dpi, 컬러·회색조·흑백) */
+  async preparePrint(pages: number[], o: { fit: 'fit' | 'actual'; color: 'color' | 'gray' | 'bw'; quality: 'std' | 'high' }) {
     const d = this.doc; if (!d) return null;
     document.getElementById('print-root')?.remove(); document.getElementById('print-page-style')?.remove();
     const b = busy('인쇄 준비 중…');
@@ -1010,16 +1013,16 @@ export class App {
       for (const [k, i] of pages.entries()) {
         b.set(`인쇄 준비 중… ${k + 1}/${pages.length}페이지`);
         const p = d.info.pages[i];
-        const dpi = o.mode === 'fax' ? 300 : 200;
+        const dpi = o.quality === 'high' ? 300 : 200;
         const scale = Math.min(dpi / 72, Math.sqrt(16e6 / Math.max(1, p.w * p.h)));
         const rr: any = await this.engine.call('render', [d.id, i, scale, undefined, true, false]);
         let c = document.createElement('canvas'); c.width = rr.width; c.height = rr.height;
         const ctx = c.getContext('2d')!;
         if (rr.bitmap) { ctx.drawImage(rr.bitmap, 0, 0); rr.bitmap.close(); } else ctx.putImageData(new ImageData(rr.data, rr.width, rr.height), 0, 0);
-        if (o.mode === 'fax') toBilevel(c);
+        if (o.color === 'bw') toBW(c, scale * 72); else if (o.color === 'gray') toGray(c);
         const turn = o.fit === 'fit' && (p.w > p.h) !== land && Math.abs(p.w - p.h) > 1;
         if (turn) { const t = document.createElement('canvas'); t.width = c.height; t.height = c.width; const g = t.getContext('2d')!; g.translate(t.width, 0); g.rotate(Math.PI / 2); g.drawImage(c, 0, 0); c = t; }
-        const blob: Blob = await new Promise(res => o.mode === 'fax' ? c.toBlob(bb => res(bb!), 'image/png') : c.toBlob(bb => res(bb!), 'image/jpeg', 0.95));
+        const blob: Blob = await new Promise(res => o.color === 'bw' ? c.toBlob(bb => res(bb!), 'image/png') : c.toBlob(bb => res(bb!), 'image/jpeg', 0.95));
         const [w, hh] = turn ? [p.h, p.w] : [p.w, p.h];
         const img = h('img', { src: URL.createObjectURL(blob), alt: '' }) as HTMLImageElement;
         if (o.fit === 'actual') { img.style.width = w + 'pt'; img.style.height = hh + 'pt'; }
@@ -1175,16 +1178,81 @@ export function parseRange(text: string, n: number): number[] {
   }
   return [...out].sort((a, b) => a - b);
 }
-/** 팩스·흑백 프린터용: 진한 곳은 검정, 옅은 곳은 흰색, 그 사이(사진·회색 칸)는 점무늬로 */
-function toBilevel(c: HTMLCanvasElement) {
-  const g = c.getContext('2d', { willReadFrequently: true })!, im = g.getImageData(0, 0, c.width, c.height), d = im.data, W = c.width;
-  const bayer = [0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5];
-  for (let i = 0, j = 0; j < d.length; i++, j += 4) {
-    const v = d[j] * 0.299 + d[j + 1] * 0.587 + d[j + 2] * 0.114;
-    let o: number;
-    if (v < 110) o = 0; else if (v > 205) o = 255;
-    else { const x = i % W, y = (i / W) | 0; o = (v - 110) / 95 * 16 > bayer[(y & 3) * 4 + (x & 3)] + 0.5 ? 255 : 0; }
-    d[j] = d[j + 1] = d[j + 2] = o; d[j + 3] = 255;
+function toGray(c: HTMLCanvasElement) {
+  const g = c.getContext('2d', { willReadFrequently: true })!, im = g.getImageData(0, 0, c.width, c.height), d = im.data;
+  for (let j = 0; j < d.length; j += 4) d[j] = d[j + 1] = d[j + 2] = d[j] * 0.299 + d[j + 1] * 0.587 + d[j + 2] * 0.114;
+  g.putImageData(im, 0, 0);
+}
+/**
+ * 흑백(팩스·흑백 복사용): 글자·선과 사진·그림을 나눠서 따로 바꾼다.
+ * - 글자·선: 문턱값으로 또렷한 검정/흰색 (옅은 회색 글자도 남게 문턱을 넉넉히)
+ * - 사진·그림: 밝기를 고르게 편 뒤, 45° 망점(약 55선)으로. 점이 몇 픽셀씩 뭉쳐 있어서
+ *   팩스 드라이버가 해상도를 낮추거나 다시 흑백으로 바꿔도 형체가 남는다 (한 픽셀짜리 점무늬는 뭉개진다)
+ * 사진 칸 판정: 작은 칸마다 중간 밝기 점이 많고 흰 바탕이 적으면 사진. 글자는 검정·흰색 위주라 중간 밝기가 적다
+ */
+export function toBW(c: HTMLCanvasElement, dpi: number) {
+  const W = c.width, H = c.height, g = c.getContext('2d', { willReadFrequently: true })!, im = g.getImageData(0, 0, W, H), d = im.data, n = W * H;
+  const v = new Uint8Array(n);
+  for (let i = 0, j = 0; i < n; i++, j += 4) v[i] = d[j] * 0.299 + d[j + 1] * 0.587 + d[j + 2] * 0.114;
+  // 1) 칸마다 사진인지
+  const B = Math.max(8, Math.round(dpi / 12)), bw = Math.ceil(W / B), bh = Math.ceil(H / B);
+  let photo = new Uint8Array(bw * bh);
+  for (let by = 0; by < bh; by++) for (let bx = 0; bx < bw; bx++) {
+    let mid = 0, light = 0, tot = 0;
+    for (let y = by * B; y < Math.min(H, by * B + B); y += 2) for (let x = bx * B; x < Math.min(W, bx * B + B); x += 2) {
+      const t = v[y * W + x]; tot++; if (t > 225) light++; else if (t > 45) mid++;
+    }
+    photo[by * bw + bx] = mid > tot * 0.45 && light < tot * 0.35 ? 1 : 0;
+  }
+  // 외톨이 칸은 빼고(굵은 글자 등), 사진 가장자리는 한 칸 넓힌다
+  const at = (m: Uint8Array, x: number, y: number) => x >= 0 && y >= 0 && x < bw && y < bh ? m[y * bw + x] : 0;
+  const clean = new Uint8Array(bw * bh);
+  for (let y = 0; y < bh; y++) for (let x = 0; x < bw; x++) {
+    if (!photo[y * bw + x]) continue;
+    let k = 0; for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) if (dx || dy) k += at(photo, x + dx, y + dy);
+    if (k >= 2) clean[y * bw + x] = 1;
+  }
+  photo = new Uint8Array(bw * bh);
+  for (let y = 0; y < bh; y++) for (let x = 0; x < bw; x++) {
+    let on = 0; for (let dy = -1; dy <= 1 && !on; dy++) for (let dx = -1; dx <= 1; dx++) if (at(clean, x + dx, y + dy)) { on = 1; break; }
+    photo[y * bw + x] = on;
+  }
+  // 2) 사진 부분 밝기 범위 (2%~98%)
+  const hist = new Uint32Array(256); let pn = 0;
+  for (let y = 0; y < H; y += 2) for (let x = 0; x < W; x += 2) if (photo[((y / B) | 0) * bw + ((x / B) | 0)]) { hist[v[y * W + x]]++; pn++; }
+  let lo = 0, hi = 255;
+  if (pn) { let a = 0; while (lo < 254 && (a += hist[lo]) < pn * 0.02) lo++; a = 0; while (hi > lo + 1 && (a += hist[hi]) < pn * 0.02) hi--; }
+  const span = Math.max(40, hi - lo);
+  // 사진 부분은 가는 선·윤곽이 망점에 묻히지 않게 먼저 선명하게 (언샤프)
+  if (pn) {
+    const r = Math.max(1, Math.round(dpi / 150)), tmp = new Float32Array(n), bl = new Float32Array(n);
+    // 가로·세로로 상자 흐림 (누적합)
+    for (let y = 0; y < H; y++) { const o = y * W; let acc = 0; for (let x = 0; x < W; x++) { acc += v[o + x]; if (x > 2 * r) acc -= v[o + x - 2 * r - 1]; const c = x - r; if (c >= 0) tmp[o + c] = acc / Math.min(2 * r + 1, x + 1); } for (let c = Math.max(0, W - r); c < W; c++) tmp[o + c] = v[o + c]; }
+    for (let x = 0; x < W; x++) { let acc = 0; for (let y = 0; y < H; y++) { acc += tmp[y * W + x]; if (y > 2 * r) acc -= tmp[(y - 2 * r - 1) * W + x]; const c = y - r; if (c >= 0) bl[c * W + x] = acc / Math.min(2 * r + 1, y + 1); } for (let c = Math.max(0, H - r); c < H; c++) bl[c * W + x] = tmp[c * W + x]; }
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) { if (!photo[((y / B) | 0) * bw + ((x / B) | 0)]) continue; const i = y * W + x; v[i] = Math.max(0, Math.min(255, v[i] + (v[i] - bl[i]) * 1.2)); }
+  }
+  // 3) 바꾸기
+  const cell = Math.max(3, dpi / 55), k = 1 / (cell * Math.SQRT2), TAU = Math.PI * 2;
+  for (let y = 0; y < H; y++) {
+    const row = ((y / B) | 0) * bw;
+    for (let x = 0; x < W; x++) {
+      const i = y * W + x, t = v[i];
+      let black: boolean;
+      if (!photo[row + ((x / B) | 0)]) black = t < 165;
+      else {
+        // 밝기를 펴고 중간톤을 조금 밝게 (팩스 망점은 실제보다 어둡게 보인다)
+        const u = Math.max(0, Math.min(1, (t - lo) / span)), dark = 1 - Math.pow(u, 0.8);
+        if (dark < 0.05) black = false;
+        else if (dark > 0.95) black = true;
+        else {
+          const a = (x + y) * k, b = (x - y) * k;
+          const spot = 0.5 + 0.25 * (Math.cos(TAU * a) + Math.cos(TAU * b));
+          black = dark > 1 - spot;
+        }
+      }
+      const o = black ? 0 : 255, j = i * 4; d[j] = d[j + 1] = d[j + 2] = o; d[j + 3] = 255;
+    }
   }
   g.putImageData(im, 0, 0);
+  return { photoBlocks: photo.reduce((a, b) => a + b, 0), blocks: bw * bh };
 }
