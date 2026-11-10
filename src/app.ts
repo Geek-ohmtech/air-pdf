@@ -38,7 +38,7 @@ export class App {
   private searchInput!: HTMLInputElement; private saveBtn!: HTMLButtonElement; private modeBtns!: HTMLElement;
   private hits: SearchHit[] = []; private hitByPage = new Map<number, SearchHit[]>(); private hitIdx = -1; private lastQuery = '';
   private searchOpts = { matchCase: false, wholeWord: false };
-  prefs: { theme: string; spread: boolean; night: boolean; sidebar: boolean; author: string; shortcuts?: Record<string, string[]>; autoUpdate?: boolean; accent?: string; scanSuggest?: boolean; scanDefault?: { correct: boolean; ocr: boolean }; recent?: { on: boolean; days: number; max: number }; printerAsked?: boolean } = { theme: 'system', spread: false, night: false, sidebar: true, author: '' };
+  prefs: { theme: string; spread: boolean; night: boolean; sidebar: boolean; author: string; shortcuts?: Record<string, string[]>; autoUpdate?: boolean; accent?: string; scanSuggest?: boolean; scanDefault?: { correct: boolean; ocr: boolean }; recent?: { on: boolean; days: number; max: number }; printerAsked?: boolean; print?: { fit: 'fit' | 'actual'; mode: 'normal' | 'fax' } } = { theme: 'system', spread: false, night: false, sidebar: true, author: '' };
 
   constructor(engine: EngineClient, platform: Platform) {
     this.engine = engine; this.platform = platform;
@@ -959,30 +959,78 @@ export class App {
   }
 
   /* ───────────── 인쇄 ───────────── */
+  /** 인쇄: 범위·크기·품질을 고른 뒤 운영체제 인쇄 창을 연다 */
   async print() {
     const d = this.doc; if (!d) return;
     const n = d.info.pageCount;
-    if (n > 60 && !(await confirmBox('인쇄', `${n}페이지를 인쇄용으로 준비합니다. 시간이 조금 걸릴 수 있습니다.`, '계속'))) return;
-    const b = busy('인쇄 준비 중…');
-    const root = h('div', { id: 'print-root' });
-    try {
-      for (let i = 0; i < n; i++) {
-        b.set(`인쇄 준비 중… ${i + 1}/${n}페이지`);
-        const p = d.info.pages[i];
-        const r: any = await this.engine.call('render', [d.id, i, 150 / 72]);
-        const c = document.createElement('canvas'); c.width = r.width; c.height = r.height;
-        const ctx = c.getContext('2d')!;
-        if (r.bitmap) { ctx.drawImage(r.bitmap, 0, 0); r.bitmap.close(); } else ctx.putImageData(new ImageData(r.data, r.width, r.height), 0, 0);
-        const blob: Blob = await new Promise(res => c.toBlob(bb => res(bb!), 'image/jpeg', 0.92));
-        root.append(h('img', { src: URL.createObjectURL(blob), class: p.w > p.h ? 'land' : '' }));
-      }
-    } finally { b.done(); }
-    document.body.append(root);
-    const cleanup = () => { root.querySelectorAll('img').forEach(i => URL.revokeObjectURL((i as HTMLImageElement).src)); root.remove(); window.removeEventListener('afterprint', cleanup); };
+    const P = { fit: 'fit' as 'fit' | 'actual', mode: 'normal' as 'normal' | 'fax', ...this.prefs.print };
+    const radio = (name: string, value: string, on: boolean, label: string, sub = '') => h('label', { class: 'chk' }, h('input', { type: 'radio', name, value, checked: on ? '' : undefined }), ' ', label, sub ? h('small', { class: 'hint' }, ' ' + sub) : null);
+    const rangeIn = h('input', { class: 'field sm', placeholder: '예: 1-3, 5', 'aria-label': '인쇄할 페이지', style: { width: '140px' } }) as HTMLInputElement;
+    const body = h('div', { class: 'form print-opts' },
+      h('label', { class: 'lbl' }, '페이지'),
+      h('div', { class: 'row' }, radio('pr-range', 'all', true, `전체 (${n}페이지)`), radio('pr-range', 'cur', false, `현재 페이지 (${this.view.current + 1})`),
+        h('label', { class: 'chk' }, h('input', { type: 'radio', name: 'pr-range', value: 'some' }), ' 지정 ', rangeIn)),
+      h('label', { class: 'lbl' }, '크기'),
+      h('div', { class: 'row' }, radio('pr-fit', 'fit', P.fit === 'fit', '용지에 맞추기', '(여백 안에 페이지 전체가 들어가게)'), radio('pr-fit', 'actual', P.fit === 'actual', '실제 크기')),
+      h('label', { class: 'lbl' }, '품질'),
+      h('div', { class: 'row' }, radio('pr-mode', 'normal', P.mode === 'normal', '보통'), radio('pr-mode', 'fax', P.mode === 'fax', '팩스·흑백 프린터용', '(글자를 또렷한 흑백으로)')),
+      h('p', { class: 'hint' }, '팩스(삼성 네트워크 팩스 등)로 보낼 때 글자가 뭉개지면 “팩스·흑백 프린터용”을 고르세요. 가로 페이지는 용지 방향에 맞게 돌려서 인쇄합니다.'));
+    rangeIn.addEventListener('focus', () => ((body.querySelector('input[value="some"]') as HTMLInputElement).checked = true));
+    const pick = () => {
+      const v = (q: string) => (body.querySelector(`input[name="${q}"]:checked`) as HTMLInputElement).value;
+      return { range: v('pr-range'), fit: v('pr-fit') as 'fit' | 'actual', mode: v('pr-mode') as 'normal' | 'fax', text: rangeIn.value };
+    };
+    const r = await dialog({ title: '인쇄', body, buttons: [{ label: '취소', value: false }, { label: '인쇄…', value: true, primary: true }], collect: pick });
+    if (!r?.value) return;
+    const o = r.data as ReturnType<typeof pick>;
+    let pages: number[] = [];
+    if (o.range === 'cur') pages = [this.view.current];
+    else if (o.range === 'some') {
+      pages = parseRange(o.text, n);
+      if (!pages.length) { toast('인쇄할 페이지를 “1-3, 5”처럼 적어 주세요.'); return; }
+    } else pages = Array.from({ length: n }, (_, i) => i);
+    this.prefs.print = { fit: o.fit, mode: o.mode }; this.savePrefs();
+    if (pages.length > 60 && !(await confirmBox('인쇄', `${pages.length}페이지를 인쇄용으로 준비합니다. 시간이 조금 걸릴 수 있습니다.`, '계속'))) return;
+    const root = await this.preparePrint(pages, o);
+    if (!root) return;
+    const cleanup = () => { root.querySelectorAll('img').forEach(i => URL.revokeObjectURL((i as HTMLImageElement).src)); root.remove(); document.getElementById('print-page-style')?.remove(); window.removeEventListener('afterprint', cleanup); };
     window.addEventListener('afterprint', cleanup);
-    await Promise.all([...root.querySelectorAll('img')].map(i => (i as HTMLImageElement).decode().catch(() => {})));
     window.print();
     setTimeout(cleanup, 60_000);
+  }
+  /** 인쇄할 그림을 만든다. 보통: 200dpi 컬러, 팩스: 300dpi 흑백(중간 밝기는 점무늬) */
+  async preparePrint(pages: number[], o: { fit: 'fit' | 'actual'; mode: 'normal' | 'fax' }) {
+    const d = this.doc; if (!d) return null;
+    document.getElementById('print-root')?.remove(); document.getElementById('print-page-style')?.remove();
+    const b = busy('인쇄 준비 중…');
+    const root = h('div', { id: 'print-root', class: o.fit });
+    // 용지 방향은 많은 쪽을 따르고, 맞추기에서는 반대 방향 페이지를 돌려서 크게 찍는다
+    const land = pages.filter(i => { const p = d.info.pages[i]; return p.w > p.h; }).length > pages.length / 2;
+    try {
+      for (const [k, i] of pages.entries()) {
+        b.set(`인쇄 준비 중… ${k + 1}/${pages.length}페이지`);
+        const p = d.info.pages[i];
+        const dpi = o.mode === 'fax' ? 300 : 200;
+        const scale = Math.min(dpi / 72, Math.sqrt(16e6 / Math.max(1, p.w * p.h)));
+        const rr: any = await this.engine.call('render', [d.id, i, scale, undefined, true, false]);
+        let c = document.createElement('canvas'); c.width = rr.width; c.height = rr.height;
+        const ctx = c.getContext('2d')!;
+        if (rr.bitmap) { ctx.drawImage(rr.bitmap, 0, 0); rr.bitmap.close(); } else ctx.putImageData(new ImageData(rr.data, rr.width, rr.height), 0, 0);
+        if (o.mode === 'fax') toBilevel(c);
+        const turn = o.fit === 'fit' && (p.w > p.h) !== land && Math.abs(p.w - p.h) > 1;
+        if (turn) { const t = document.createElement('canvas'); t.width = c.height; t.height = c.width; const g = t.getContext('2d')!; g.translate(t.width, 0); g.rotate(Math.PI / 2); g.drawImage(c, 0, 0); c = t; }
+        const blob: Blob = await new Promise(res => o.mode === 'fax' ? c.toBlob(bb => res(bb!), 'image/png') : c.toBlob(bb => res(bb!), 'image/jpeg', 0.95));
+        const [w, hh] = turn ? [p.h, p.w] : [p.w, p.h];
+        const img = h('img', { src: URL.createObjectURL(blob), alt: '' }) as HTMLImageElement;
+        if (o.fit === 'actual') { img.style.width = w + 'pt'; img.style.height = hh + 'pt'; }
+        root.append(h('div', { class: 'pp' }, img));
+      }
+    } finally { b.done(); }
+    const st = h('style', { id: 'print-page-style' }, `@page { size: ${land ? 'landscape' : 'portrait'}; margin: ${o.fit === 'fit' ? '5mm' : '0'}; }`);
+    document.head.append(st);
+    document.body.append(root);
+    await Promise.all([...root.querySelectorAll('img')].map(i => (i as HTMLImageElement).decode().catch(() => {})));
+    return root;
   }
 
   /* ───────────── 키보드 / 끌어다 놓기 ───────────── */
@@ -1116,3 +1164,27 @@ export class App {
   }
 }
 export { esc, $ };
+
+/** "1-3, 5, 8-" → 0부터 센 페이지 번호 (중복·범위 밖 빼고, 순서대로) */
+export function parseRange(text: string, n: number): number[] {
+  const out = new Set<number>();
+  for (const part of text.split(/[,，\s]+/).filter(Boolean)) {
+    const m = part.match(/^(\d*)\s*[-~]\s*(\d*)$/);
+    if (m) { const a = m[1] ? +m[1] : 1, b = m[2] ? +m[2] : n; for (let i = Math.max(1, Math.min(a, b)); i <= Math.min(n, Math.max(a, b)); i++) out.add(i - 1); }
+    else if (/^\d+$/.test(part) && +part >= 1 && +part <= n) out.add(+part - 1);
+  }
+  return [...out].sort((a, b) => a - b);
+}
+/** 팩스·흑백 프린터용: 진한 곳은 검정, 옅은 곳은 흰색, 그 사이(사진·회색 칸)는 점무늬로 */
+function toBilevel(c: HTMLCanvasElement) {
+  const g = c.getContext('2d', { willReadFrequently: true })!, im = g.getImageData(0, 0, c.width, c.height), d = im.data, W = c.width;
+  const bayer = [0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5];
+  for (let i = 0, j = 0; j < d.length; i++, j += 4) {
+    const v = d[j] * 0.299 + d[j + 1] * 0.587 + d[j + 2] * 0.114;
+    let o: number;
+    if (v < 110) o = 0; else if (v > 205) o = 255;
+    else { const x = i % W, y = (i / W) | 0; o = (v - 110) / 95 * 16 > bayer[(y & 3) * 4 + (x & 3)] + 0.5 ? 255 : 0; }
+    d[j] = d[j + 1] = d[j + 2] = o; d[j + 3] = 255;
+  }
+  g.putImageData(im, 0, 0);
+}
