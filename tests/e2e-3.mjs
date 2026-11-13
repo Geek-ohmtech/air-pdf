@@ -190,6 +190,13 @@ await page.waitForTimeout(1200);
 const after = await objs();
 const txt = await ev(async () => (await window.__app.engine.call('textData', [window.__app.doc.id, 0])).text);
 ok(after.some(o => o.type === 'shape') && after.some(o => o.type === 'image') && !txt.includes('제2조'), '글자만 지우고 도형·그림은 남김');
+// 되돌리기: 지운 글자가 돌아오고, 다시 하기: 다시 지워진다
+await page.keyboard.press('Control+z'); await page.waitForTimeout(900);
+const txtU = await ev(async () => (await window.__app.engine.call('textData', [window.__app.doc.id, 0])).text);
+ok(txtU.includes('제2조'), '영역 삭제 되돌리기 → 지운 글자가 돌아옴');
+await page.keyboard.press('Control+y'); await page.waitForTimeout(900);
+const txtR = await ev(async () => (await window.__app.engine.call('textData', [window.__app.doc.id, 0])).text);
+ok(!txtR.includes('제2조'), '다시 하기 → 다시 지워짐');
 await page.keyboard.press('Control+z'); await page.waitForTimeout(900);
 
 console.log('회전: 모든 쪽');

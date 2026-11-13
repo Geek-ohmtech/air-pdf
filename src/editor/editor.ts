@@ -13,7 +13,7 @@ type Tab = 'edit' | 'annot' | 'page' | 'tools';
 type Tool = 'select' | 'editText' | 'addText' | 'textbox' | 'image' | 'sign' | 'table' | 'rect' | 'ellipse' | 'line' | 'free' | 'redact'
   | 'aselect' | 'highlight' | 'underline' | 'strike' | 'note' | 'pen' | 'arect' | 'aellipse';
 interface ObjChange { key: number; gen: number; removed: { h: number; idx: number }[]; added: { h: number; idx: number }[]; substituted: boolean; also?: number[] }
-interface Entry { label: string; keys: number[]; undo: () => Promise<boolean | void>; redo: () => Promise<boolean | void>; structural?: boolean }
+interface Entry { label: string; keys: number[]; undo: () => Promise<boolean | void>; redo: () => Promise<boolean | void>; structural?: boolean; dispose?: () => void }
 type Sel = { kind: 'run'; page: number; key: number; run: TextRun } | { kind: 'obj'; page: number; key: number; obj: PageObjInfo } | { kind: 'annot'; page: number; key: number; annot: AnnotInfo };
 
 const ANNOT = { TEXT: 1, SQUARE: 5, CIRCLE: 6, HIGHLIGHT: 9, UNDERLINE: 10, STRIKEOUT: 12, INK: 15 };
@@ -29,7 +29,7 @@ const TOOLS: Record<Tool, { tab: Tab; label: string; icon: IconName; key?: strin
   ellipse: { tab: 'edit', label: '원', icon: 'ellipse', hint: '끌어서 원을 그립니다 (PDF 도형).' },
   line: { tab: 'edit', label: '선', icon: 'line', key: 'l', hint: '끌어서 선을 긋습니다 (PDF 도형).' },
   free: { tab: 'edit', label: '자유선', icon: 'free', hint: '끌어서 자유롭게 그립니다 (PDF 선). 나중에 선택해서 색·굵기를 바꿀 수 있습니다.' },
-  redact: { tab: 'edit', label: '영역 삭제', icon: 'redact', key: 'x', hint: '끌어서 선택한 영역의 글자·그림·선을 실제로 삭제합니다. 되돌릴 수 없습니다.' },
+  redact: { tab: 'edit', label: '영역 삭제', icon: 'redact', key: 'x', hint: '끌어서 선택한 영역의 글자·그림·선을 실제로 삭제합니다 (저장 전에는 Ctrl+Z로 되돌리기).' },
   aselect: { tab: 'annot', label: '주석 선택', icon: 'select', hint: '주석을 눌러 고릅니다. 메모는 두 번 눌러 내용을 수정합니다. Delete로 삭제합니다.' },
   highlight: { tab: 'annot', label: '형광펜', icon: 'highlight', key: 'h', hint: '강조할 글자를 끌어서 선택하세요.' },
   underline: { tab: 'annot', label: '밑줄', icon: 'underline', key: 'u', hint: '밑줄 칠 글자를 끌어서 선택하세요.' },
@@ -772,9 +772,13 @@ export class Editor {
 
   /* ───────────── 되돌리기 ───────────── */
   private push(e: Entry) {
-    this.undoS.push(e); if (this.undoS.length > 200) this.undoS.shift();
-    this.redoS = []; this.updateUndo(); this.app.markDirty();
+    this.undoS.push(e); if (this.undoS.length > 200) this.undoS.shift()?.dispose?.();
+    this.clearStack(this.redoS); this.updateUndo(); this.app.markDirty();
   }
+  /** 되돌리기 목록을 비우며, 들고 있던 페이지 복사본 등을 닫는다 */
+  private clearStack(s: Entry[]) { for (const e of s.splice(0)) e.dispose?.(); }
+  /** 탭을 닫을 때: 그 탭의 되돌리기 기록이 들고 있던 페이지 복사본을 닫는다 */
+  disposeState(st?: { undoS?: Entry[]; redoS?: Entry[] }) { if (st?.undoS) this.clearStack(st.undoS); if (st?.redoS) this.clearStack(st.redoS); }
   private updateUndo() {
     this.undoBtn.disabled = !this.undoS.length; this.redoBtn.disabled = !this.redoS.length;
     this.undoBtn.title = this.undoS.length ? `되돌리기: ${this.undoS[this.undoS.length - 1].label} (Ctrl+Z)` : '되돌리기 (Ctrl+Z)';
@@ -1051,12 +1055,20 @@ export class Editor {
       await this.afterCreate(page, ch.added[0]?.h); // 방금 그린 도형을 선택해 둔다 → 색·굵기·크기를 바로 수정할 수 있다
     } else if (t === 'redact') {
       const textOnly = P.redactWhat === 'text';
-      if (!(await confirmBox(textOnly ? '영역의 글자만 삭제' : '영역 삭제', (textOnly ? '선택한 영역의 글자만 PDF에서 실제로 삭제합니다. 그림·선·표 테두리는 그대로 남습니다.' : '선택한 영역의 글자·그림·선을 PDF에서 실제로 삭제합니다. 덮어 가리는 것이 아니어서 개인정보를 삭제할 때 안전합니다.') + ' 이 작업은 되돌릴 수 없고, 지금까지의 되돌리기 기록도 비워집니다.', '삭제', true))) return;
+      if (!(await confirmBox(textOnly ? '영역의 글자만 삭제' : '영역 삭제', (textOnly ? '선택한 영역의 글자만 PDF에서 실제로 삭제합니다. 그림·선·표 테두리는 그대로 남습니다.' : '선택한 영역의 글자·그림·선을 PDF에서 실제로 삭제합니다. 덮어 가리는 것이 아니어서 개인정보를 삭제할 때 안전합니다.') + ' 저장하면 지운 내용은 파일에 남지 않습니다 (저장 전에는 Ctrl+Z로 되돌릴 수 있습니다).', '삭제', true))) return;
+      // 되돌리기용으로 지우기 전·후 페이지를 따로 복사해 둔다 (이 복사본은 저장되지 않는다)
+      const before = await this.E.call<number>('snapshotPage', [id, key]);
       if (textOnly) await this.E.call('redactText', [id, key, r]);
       else await this.E.call('redact', [id, key, r, P.redactFill === 'black' ? '#000000' : null]);
-      this.undoS = []; this.redoS = []; this.updateUndo();
+      const after = await this.E.call<number>('snapshotPage', [id, key]);
+      this.push({
+        label: textOnly ? '영역의 글자 삭제' : '영역 삭제', keys: [key], structural: true,
+        undo: () => this.E.call('replacePage', [id, key, before]),
+        redo: () => this.E.call('replacePage', [id, key, after]),
+        dispose: () => { this.E.call('closeSnapshot', [before]); this.E.call('closeSnapshot', [after]); },
+      });
       this.changed(key); this.app.markDirty();
-      toast(textOnly ? '영역의 글자를 지웠습니다.' : '영역의 내용을 지웠습니다.');
+      toast(textOnly ? '영역의 글자를 지웠습니다. (Ctrl+Z로 되돌리기)' : '영역의 내용을 지웠습니다. (Ctrl+Z로 되돌리기)');
     } else if (t === 'arect' || t === 'aellipse') {
       const aid = await this.E.call<number>('addAnnot', [id, key, { subtype: t === 'arect' ? ANNOT.SQUARE : ANNOT.CIRCLE, rect: r, color: P.annotColor, width: P.width }]);
       this.annotEntry(t === 'arect' ? '사각 표시' : '원 표시', key, aid);

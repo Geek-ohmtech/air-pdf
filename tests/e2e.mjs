@@ -1,5 +1,6 @@
 // 브라우저 시험: node tests/e2e.mjs  (먼저 npm run build && vite preview --port 4173)
 import { createRequire } from 'node:module';
+import fs from 'node:fs';
 const { chromium } = createRequire(import.meta.url)('playwright');
 const SHOT = process.env.SHOT || '/tmp';
 const base = 'http://localhost:4173/';
@@ -155,6 +156,10 @@ const [dl] = await Promise.all([page.waitForEvent('download'), page.keyboard.pre
 const savedPath = SHOT + '/saved.pdf';
 await dl.saveAs(savedPath);
 ok(true, '저장 파일 받음: ' + dl.suggestedFilename());
+// 안전: 영역 삭제한 글자는 저장본에 남지 않는다 (되돌리기용 복사본이 파일로 새지 않음)
+const savedBytes = fs.readFileSync(savedPath);
+const reDoc = await page.evaluate(async bytes => { const r = await window.__app.engine.call('open', [new Uint8Array(bytes), '']); const t = await window.__app.engine.call('textData', [r.docId, 0]); await window.__app.engine.call('close', [r.docId]); return t.text; }, [...savedBytes]);
+ok(!reDoc.includes('Payment'), '저장본을 다시 열어도 영역 삭제한 글자는 없음');
 
 console.log('암호 문서');
 await page.evaluate(() => { window.__app.doc.dirty = false; });

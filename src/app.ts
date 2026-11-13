@@ -584,6 +584,9 @@ export class App {
     }
     const i = this.tabs.indexOf(tab);
     this.tabs.splice(i, 1);
+    // 영역 삭제 되돌리기용으로 들고 있던 페이지 복사본 정리
+    if (tab === this.doc && this.editor) tab.editorState = this.editor.saveState();
+    this.editor?.disposeState(tab.editorState);
     this.engine.call('close', [tab.id]);
     if (tab === this.doc) {
       await this.editor?.commitPending();

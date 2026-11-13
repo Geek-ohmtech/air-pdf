@@ -653,7 +653,35 @@ export class PdfEngine {
     return true;
   }
 
-  /** 영역 안의 글자·그림·선을 실제로 지운다(겉만 덮는 것이 아님). 되돌릴 수 없다. */
+  /** 되돌리기용: 페이지를 통째로 임시 문서에 복사해 둔다 (원본 페이지는 그대로). 반환: 임시 문서 핸들.
+   * 복사본은 이 문서(d.doc)와 따로여서 저장되지 않는다 → 영역 삭제한 내용은 저장본에 남지 않는다. */
+  snapshotPage(docId: number, key: number): number {
+    const d = this.D(docId); const pc = this.pageByKey(d, key);
+    this.P.FPDFPage_GenerateContent(pc.page);
+    const index = d.keys.indexOf(key);
+    const tmp = this.P.FPDF_CreateNewDocument();
+    const ip = this.malloc(4); this.M.HEAP32[ip >> 2] = index;
+    this.P.FPDF_ImportPagesByIndex(tmp, d.doc, ip, 1, 0); this.free(ip);
+    return tmp;
+  }
+  /** 되돌리기용: 현재 페이지를 snapshotPage로 떠 둔 복사본으로 바꾼다. tmp는 닫지 않아 다시 쓸 수 있다. */
+  replacePage(docId: number, key: number, tmp: number) {
+    const d = this.D(docId); const index = d.keys.indexOf(key);
+    if (index < 0) return false;
+    const pc = d.pages.get(key);
+    if (pc) { this.closePage(pc); d.pages.delete(key); }
+    this.P.FPDFPage_Delete(d.doc, index);
+    const ip = this.malloc(4); this.M.HEAP32[ip >> 2] = 0;
+    const ok = this.P.FPDF_ImportPagesByIndex(d.doc, tmp, ip, 1, index); this.free(ip);
+    if (!ok) throw new Error('페이지를 되돌리지 못했습니다');
+    d.gen.set(key, this.gen(d, key) + 1); // 옛 객체 번호는 무효
+    this.pageByKey(d, key).dirty = true;
+    return true;
+  }
+  /** 더 안 쓰는 페이지 복사본을 닫아 메모리를 비운다 */
+  closeSnapshot(tmp: number) { if (tmp) this.P.FPDF_CloseDocument(tmp); return true; }
+
+  /** 영역 안의 글자·그림·선을 실제로 지운다(겉만 덮는 것이 아님). */
   redact(docId: number, key: number, rect: Rect, fill: string | null) {
     const id = this.addAnnot(docId, key, { subtype: ANNOT.REDACT, quads: [rect], rect, color: fill || '#000000' });
     const d = this.D(docId); const pc = this.pageByKey(d, key);
