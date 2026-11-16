@@ -106,6 +106,21 @@ await page.click('.modal .btn:has-text("새 탭으로")');
 await page.waitForFunction(() => window.__app.tabs.length === 5, null, { timeout: 10000 });
 ok(true, '줄인 사본을 새 탭으로 엶');
 
+console.log('용량 줄이기: 목표 용량');
+await page.locator('.tabbar .tab').nth(3).click(); // 그림 넣은 문서 탭으로
+await page.waitForTimeout(300);
+await page.click('.topbar .tb-group:last-child .tb:last-child');
+await page.click('.menu-item:has-text("PDF 용량 줄이기")');
+await page.waitForSelector('.modal .cmp-row');
+ok(await page.locator('.modal .cmp-row').count() === 2 && await page.locator('.modal input[type=number]').count() === 1, '정도·목표 용량 두 방식');
+await page.check('.modal input[name="cmp-mode"][value="target"]');
+await page.fill('.modal input[type=number]', '0.2');
+await page.click('.modal .btn.primary');
+await page.waitForSelector('.modal .big-num', { timeout: 60000 });
+const tnum = /→ ([\d.]+)(MB|KB)/.exec(await page.textContent('.modal .big-num'));
+ok(tnum && (tnum[2] === 'KB' || +tnum[1] < 0.5), '목표 용량으로 줄임: ' + tnum?.[0]);
+await page.click('.modal .btn:has-text("닫기")');
+
 console.log('쪽을 이미지로 내보내기');
 await page.click('.topbar .tb-group:last-child .tb:last-child');
 await page.click('.menu-item:has-text("이미지로 내보내기")');

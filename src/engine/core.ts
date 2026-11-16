@@ -1834,62 +1834,71 @@ export class PdfEngine {
     const r = this.open(bytes, src.password); if (!r.docId) throw new Error('사본을 만들지 못했습니다');
     const id = r.docId, d = this.D(id);
     try {
-      type Cand = { key: number; o: number; sig: string; raw: number; rect: number[] };
-      const cands: Cand[] = []; const count = new Map<string, number>();
       const sp = this.malloc(8);
+      const sigOf = (o: number) => {
+        const raw = this.P.FPDFImageObj_GetImageDataRaw(o, 0, 0);
+        this.P.FPDFImageObj_GetImagePixelSize(o, sp, sp + 4);
+        const [pw, ph] = this.u32(sp, 2);
+        return { raw, pw, ph, sig: `${raw}:${pw}x${ph}` };
+      };
+      // 한 쪽씩 열고 바로 닫아 메모리를 아낀다. 큰 그림이 많은 문서(스캔본)에서 전부 올려 두면
+      // WASM 메모리가 바닥나 PDFium이 멈추므로(“table index is out of bounds”), 쪽마다 처리하고 닫는다.
+      const releasePage = (key: number) => { const pc = d.pages.get(key); if (pc) { this.closePage(pc); d.pages.delete(key); } };
+      // 1차: 여러 쪽이 함께 쓰는 그림(로고 등)은 건드리지 않으려고 서명만 센다
+      const count = new Map<string, number>(); let totalImgs = 0;
       for (const key of d.keys) {
-        const pc = this.pageByKey(d, key); pc.dirty = true;
-        this.walk(pc, (o, t, fm) => {
-          if (t !== OBJ_IMAGE || fm) return; // 양식 안 그림은 건드리지 않는다
-          const raw = this.P.FPDFImageObj_GetImageDataRaw(o, 0, 0);
-          this.P.FPDFImageObj_GetImagePixelSize(o, sp, sp + 4);
-          const [pw, ph] = this.u32(sp, 2);
-          let b = this.objBounds(o); if (!b) return;
-          if (fm) b = this.mapBounds(b, fm);
-          const sig = `${raw}:${pw}x${ph}`;
-          count.set(sig, (count.get(sig) || 0) + 1);
-          cands.push({ key, o, sig, raw, rect: [pw, ph, b[2] - b[0], b[3] - b[1]] });
-        });
+        const pc = this.pageByKey(d, key);
+        this.walk(pc, (o, t, fm) => { if (t !== OBJ_IMAGE || fm) return; totalImgs++; const { sig } = sigOf(o); count.set(sig, (count.get(sig) || 0) + 1); });
+        releasePage(key);
+      }
+      // 2차: 쪽마다 큰 그림을 낮은 해상도 JPEG로 다시 저장
+      let changed = 0, done = 0;
+      for (const key of d.keys) {
+        const pc = this.pageByKey(d, key);
+        const imgs: number[] = [];
+        this.walk(pc, (o, t, fm) => { if (t === OBJ_IMAGE && !fm) imgs.push(o); });
+        let pageChanged = false;
+        for (const o of imgs) {
+          progress?.(++done, totalImgs);
+          const { raw, pw, ph, sig } = sigOf(o);
+          if (count.get(sig)! > 1 || raw < 24 * 1024) continue; // 여러 번 쓰인 그림과 작은 그림은 그대로
+          const b = this.objBounds(o); if (!b) continue;
+          const wpt = b[2] - b[0], hpt = b[3] - b[1];
+          if (!pw || !ph || wpt <= 0 || hpt <= 0) continue;
+          const filters = Array.from({ length: this.P.FPDFImageObj_GetImageFilterCount(o) }, (_, i) => { const n = this.P.FPDFImageObj_GetImageFilter(o, i, 0, 0); const bf = this.malloc(n); this.P.FPDFImageObj_GetImageFilter(o, i, bf, n); const s = this.M.UTF8ToString(bf); this.free(bf); return s; });
+          if (filters.some(f => /JBIG2|CCITT/.test(f))) continue; // 흑백 스캔 압축은 이미 작다
+          if (this.P.FPDFPageObj_HasTransparency(o)) continue;
+          const dpi = Math.max(pw / (wpt / 72), ph / (hpt / 72));
+          const k = Math.min(1, opts.dpi / dpi);
+          if (k > 0.92 && filters.includes('DCTDecode') && opts.quality >= 0.8) continue;
+          const bm = this.P.FPDFImageObj_GetBitmap(o); if (!bm) continue;
+          const fmt = this.P.FPDFBitmap_GetFormat(bm), w = this.P.FPDFBitmap_GetWidth(bm), h = this.P.FPDFBitmap_GetHeight(bm), stride = this.P.FPDFBitmap_GetStride(bm), ptr = this.P.FPDFBitmap_GetBuffer(bm);
+          if (fmt === 1 && filters.length === 0 && w * h < 1) { this.P.FPDFBitmap_Destroy(bm); continue; }
+          const rgba = new Uint8ClampedArray(w * h * 4), H8 = this.M.HEAPU8;
+          for (let y = 0; y < h; y++) {
+            const row = ptr + y * stride;
+            for (let x = 0; x < w; x++) {
+              const oi = (y * w + x) * 4;
+              if (fmt === 1) { const g = H8[row + x]; rgba[oi] = rgba[oi + 1] = rgba[oi + 2] = g; }
+              else { const bpp = fmt === 2 ? 3 : 4, s = row + x * bpp; rgba[oi] = H8[s + 2]; rgba[oi + 1] = H8[s + 1]; rgba[oi + 2] = H8[s]; }
+              rgba[oi + 3] = 255;
+            }
+          }
+          this.P.FPDFBitmap_Destroy(bm);
+          const ow = Math.max(1, Math.round(w * k)), oh = Math.max(1, Math.round(h * k));
+          const jpg = await encode(rgba, w, h, ow, oh, opts.quality);
+          if (jpg.length > raw * 0.9) continue;
+          const p = this.put(jpg);
+          if (this.P.EPDFImageObj_SetJpeg(pc.page, 0, o, p, jpg.length)) { changed++; pageChanged = true; }
+          this.free(p);
+          await yieldNow();
+        }
+        if (pageChanged) this.P.FPDFPage_GenerateContent(pc.page);
+        releasePage(key);
       }
       this.free(sp);
-      let changed = 0, done = 0;
-      for (const c of cands) {
-        progress?.(++done, cands.length);
-        if (count.get(c.sig)! > 1 || c.raw < 24 * 1024) continue; // 여러 번 쓰인 그림(로고 등)과 작은 그림은 그대로
-        const [pw, ph, wpt, hpt] = c.rect;
-        if (!pw || !ph || wpt <= 0 || hpt <= 0) continue;
-        const filters = Array.from({ length: this.P.FPDFImageObj_GetImageFilterCount(c.o) }, (_, i) => { const n = this.P.FPDFImageObj_GetImageFilter(c.o, i, 0, 0); const b = this.malloc(n); this.P.FPDFImageObj_GetImageFilter(c.o, i, b, n); const s = this.M.UTF8ToString(b); this.free(b); return s; });
-        if (filters.some(f => /JBIG2|CCITT/.test(f))) continue; // 흑백 스캔 압축은 이미 작다
-        if (this.P.FPDFPageObj_HasTransparency(c.o)) continue;
-        const dpi = Math.max(pw / (wpt / 72), ph / (hpt / 72));
-        const k = Math.min(1, opts.dpi / dpi);
-        if (k > 0.92 && filters.includes('DCTDecode') && opts.quality >= 0.8) continue;
-        const bm = this.P.FPDFImageObj_GetBitmap(c.o); if (!bm) continue;
-        const fmt = this.P.FPDFBitmap_GetFormat(bm), w = this.P.FPDFBitmap_GetWidth(bm), h = this.P.FPDFBitmap_GetHeight(bm), stride = this.P.FPDFBitmap_GetStride(bm), ptr = this.P.FPDFBitmap_GetBuffer(bm);
-        if (fmt === 1 && filters.length === 0 && w * h < 1) { this.P.FPDFBitmap_Destroy(bm); continue; }
-        const rgba = new Uint8ClampedArray(w * h * 4), H8 = this.M.HEAPU8;
-        for (let y = 0; y < h; y++) {
-          const row = ptr + y * stride;
-          for (let x = 0; x < w; x++) {
-            const o = (y * w + x) * 4;
-            if (fmt === 1) { const g = H8[row + x]; rgba[o] = rgba[o + 1] = rgba[o + 2] = g; }
-            else { const bpp = fmt === 2 ? 3 : 4, s = row + x * bpp; rgba[o] = H8[s + 2]; rgba[o + 1] = H8[s + 1]; rgba[o + 2] = H8[s]; }
-            rgba[o + 3] = 255;
-          }
-        }
-        this.P.FPDFBitmap_Destroy(bm);
-        const ow = Math.max(1, Math.round(w * k)), oh = Math.max(1, Math.round(h * k));
-        const jpg = await encode(rgba, w, h, ow, oh, opts.quality);
-        if (jpg.length > c.raw * 0.9) continue;
-        const pc = this.pageByKey(d, c.key);
-        const p = this.put(jpg);
-        if (this.P.EPDFImageObj_SetJpeg(pc.page, 0, c.o, p, jpg.length)) changed++;
-        this.free(p);
-        if (done % 3 === 0) await yieldNow();
-      }
-      for (const pc of d.pages.values()) this.P.FPDFPage_GenerateContent(pc.page);
       const out = this.saveDoc(d.doc);
-      return { bytes: out, before: bytes.length, after: out.length, images: changed, total: cands.length };
+      return { bytes: out, before: bytes.length, after: out.length, images: changed, total: totalImgs };
     } finally { this.close(id); }
   }
 

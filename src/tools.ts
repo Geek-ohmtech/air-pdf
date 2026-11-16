@@ -337,29 +337,65 @@ export async function mergeFiles(app: App, src?: OpenedFile[]) {
   toast(`${used}개 문서, ${at}페이지를 합쳤습니다. Ctrl+S로 저장하세요.`);
 }
 
+type CompressRes = { bytes: Uint8Array; before: number; after: number; images: number; total: number };
+const mbStr = (n: number) => n < 1048576 ? Math.max(1, Math.round(n / 1024)) + 'KB' : (n / 1048576).toFixed(2) + 'MB';
+/** 목표 용량에 맞출 때 쓰는 단계(해상도·화질). 위에서부터(화질 좋은 쪽) 시도하며, 목표보다 크면 아래로 내려간다 */
+const COMPRESS_LADDER: [number, number][] = [[220, 0.82], [180, 0.78], [150, 0.72], [120, 0.66], [96, 0.6], [72, 0.52], [55, 0.45]];
+
 /** 용량 줄이기: 사본을 만들어 큰 그림만 낮은 해상도로. 원본은 그대로 둔다 */
 export async function compressPdf(app: App) {
   const d = app.doc; if (!d) return;
+  // 방식: 정도로 고르기 ↔ 목표 용량에 맞추기
   const lvl = h('select', { class: 'field' },
     h('option', { value: '96,0.6' }, '많이 줄이기 — 화면·메일용 (96dpi)'),
     h('option', { value: '150,0.72', selected: '' }, '보통 — 대부분 이걸로 충분 (150dpi)'),
-    h('option', { value: '220,0.82' }, '조금만 — 인쇄용 (220dpi)'));
-  const r = await dialog({ title: 'PDF 용량 줄이기', body: h('div', { class: 'form' }, h('label', { class: 'lbl' }, '정도'), lvl, h('p', { class: 'hint' }, '사진·스캔 그림의 해상도를 낮춰 JPEG로 다시 저장합니다. 글자·선·표는 그대로 벡터로 남아 흐려지지 않습니다. 지금 문서는 바꾸지 않고 줄인 사본을 만듭니다.')), buttons: [{ label: '취소', value: false }, { label: '줄이기', value: true, primary: true }], collect: () => lvl.value });
+    h('option', { value: '220,0.82' }, '조금만 — 인쇄용 (220dpi)')) as HTMLSelectElement;
+  const target = h('input', { class: 'field num', type: 'number', min: '0.2', step: '0.5', value: '20', style: { width: '90px' } }) as HTMLInputElement;
+  const byTarget = h('input', { type: 'radio', name: 'cmp-mode', value: 'target' }) as HTMLInputElement;
+  const byLevel = h('input', { type: 'radio', name: 'cmp-mode', value: 'level', checked: '' }) as HTMLInputElement;
+  const row = (radio: HTMLElement, label: string, ctl: HTMLElement) => h('label', { class: 'chk cmp-row' }, radio, ' ', h('span', {}, label), ctl);
+  const body = h('div', { class: 'form' },
+    row(byLevel, '정도로 고르기', lvl),
+    row(byTarget, '목표 용량', h('span', { class: 'cmp-target' }, target, ' MB 이하')),
+    h('p', { class: 'hint' }, `지금 용량 ${mbStr(d.size || 0)}. 사진·스캔 그림의 해상도를 낮춰 JPEG로 다시 저장합니다. 글자·선·표는 그대로 벡터로 남아 흐려지지 않습니다. 지금 문서는 바꾸지 않고 줄인 사본을 만듭니다.`));
+  const sync = () => { lvl.disabled = !byLevel.checked; target.disabled = !byTarget.checked; };
+  byLevel.addEventListener('change', sync); byTarget.addEventListener('change', sync);
+  target.addEventListener('focus', () => { byTarget.checked = true; sync(); });
+  lvl.addEventListener('focus', () => { byLevel.checked = true; sync(); });
+  sync();
+  const r = await dialog({ title: 'PDF 용량 줄이기', body, buttons: [{ label: '취소', value: false }, { label: '줄이기', value: true, primary: true }], collect: () => byTarget.checked ? { mode: 'target', mb: parseFloat(target.value) } : { mode: 'level', lvl: lvl.value } });
   if (!r?.value) return;
-  const [dpi, q] = String(r.data).split(',').map(Number);
+  const opt = r.data as { mode: 'target'; mb: number } | { mode: 'level'; lvl: string };
+
   const b = busy('그림을 줄이는 중…');
-  let res: { bytes: Uint8Array; before: number; after: number; images: number; total: number };
+  const run = (dpi: number, q: number, tag = '') => app.engine.call<CompressRes>('compressCopy', [d.id, { dpi, quality: q }], { progress: (p: any) => b.set(`그림을 줄이는 중…${tag} ${p.done}/${p.total}`) });
+  let res: CompressRes;
+  let targetNote = '';
   try {
-    res = await app.engine.call('compressCopy', [d.id, { dpi, quality: q }], { progress: (p: any) => b.set(`그림을 줄이는 중… ${p.done}/${p.total}`) });
+    if (opt.mode === 'level') {
+      const [dpi, q] = opt.lvl.split(',').map(Number);
+      res = await run(dpi, q);
+    } else {
+      // 목표 용량: 단계를 위에서부터 내려가며 목표 이하가 되면 멈춘다 (가장 화질 좋은 결과 선택)
+      const limit = Math.max(0.2, opt.mb || 20) * 1048576;
+      res = null as any;
+      for (let i = 0; i < COMPRESS_LADDER.length; i++) {
+        const [dpi, q] = COMPRESS_LADDER[i];
+        const cur = await run(dpi, q, ` (${i + 1}/${COMPRESS_LADDER.length}단계)`);
+        if (!res || cur.after < res.after) res = cur;
+        if (cur.after <= limit) { res = cur; break; }
+      }
+      if (res.after > limit) targetNote = `목표 ${opt.mb}MB까지는 못 줄였습니다. 가장 많이 줄인 결과입니다. (글자 위주 쪽이 많으면 그림만으로는 더 줄지 않습니다)`;
+    }
   } catch (e: any) { b.done(); toast('용량을 줄이지 못했습니다: ' + e.message); return; }
   b.done();
-  const mb = (n: number) => n < 1048576 ? Math.max(1, Math.round(n / 1024)) + 'KB' : (n / 1048576).toFixed(2) + 'MB';
-  const pct = Math.round((1 - res.after / res.before) * 100);
-  if (res.after >= res.before * 0.97) {
+
+  const mb = mbStr, pct = Math.round((1 - res.after / res.before) * 100);
+  if (res.after >= res.before * 0.97 && !targetNote) {
     await dialog({ title: 'PDF 용량 줄이기', body: `더 줄일 그림이 없습니다 (${mb(res.before)}). 그림이 이미 작거나 글자 위주인 문서입니다.`, buttons: [{ label: '확인', value: true, primary: true }] });
     return;
   }
-  const choice = await dialog({ title: 'PDF 용량 줄이기', body: h('div', { class: 'form' }, h('p', { class: 'big-num' }, `${mb(res.before)} → ${mb(res.after)}`), h('p', {}, `${pct}% 줄었습니다. 그림 ${res.images}개를 다시 저장했습니다.`)), buttons: [{ label: '닫기', value: 'close' }, { label: '새 탭으로 열어 보기', value: 'tab' }, { label: '줄인 파일 저장…', value: 'save', primary: true }] });
+  const choice = await dialog({ title: 'PDF 용량 줄이기', body: h('div', { class: 'form' }, h('p', { class: 'big-num' }, `${mb(res.before)} → ${mb(res.after)}`), h('p', {}, `${pct}% 줄었습니다. 그림 ${res.images}개를 다시 저장했습니다.`), targetNote ? h('p', { class: 'hint' }, targetNote) : null), buttons: [{ label: '닫기', value: 'close' }, { label: '새 탭으로 열어 보기', value: 'tab' }, { label: '줄인 파일 저장…', value: 'save', primary: true }] });
   if (!choice || choice.value === 'close') return;
   const name = d.name.replace(/\.pdf$/i, '') + '_압축.pdf';
   if (choice.value === 'save') { const t = await app.platform.saveAs(name, res.bytes, 'pdf'); if (t) toast(`“${t.name}”로 저장했습니다 (${mb(res.after)}).`); }
