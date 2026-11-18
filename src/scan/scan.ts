@@ -44,6 +44,23 @@ function otsu(g: Float32Array | Uint8Array) {
   for (let t = 0; t < 256; t++) { wb += hist[t]; if (!wb) continue; const wf = n - wb; if (!wf) break; sb += t * hist[t]; const mb = sb / wb, mf = (sum - sb) / wf; const v = wb * wf * (mb - mf) ** 2; if (v > best) { best = v; th = t; } }
   return th;
 }
+/**
+ * Sauvola 지역 적응 이진화 (Sauvola & Pietikäinen, 2000).
+ * 픽셀마다 둘레(반지름 r) 평균 m·표준편차 s로 문턱 T = m·(1 + k·(s/R − 1))을 정한다.
+ * 전역 Otsu와 달리 그늘·불균일 조명·옅은 글자에 강하다. 적분영상 대신 boxBlur로 지역 통계를 빠르게 구한다.
+ * k가 클수록 바탕이 더 깨끗해지고(옅은 무늬 제거), 작을수록 옅은 글자를 더 살린다.
+ */
+function sauvola(g: Float32Array, w: number, h: number, r: number, k: number, R = 128): Uint8Array {
+  const n = w * h, mean = boxBlur(g, w, h, r);
+  const sq = new Float32Array(n); for (let i = 0; i < n; i++) sq[i] = g[i] * g[i];
+  const meanSq = boxBlur(sq, w, h, r);
+  const bin = new Uint8Array(n);
+  for (let i = 0; i < n; i++) {
+    const m = mean[i], s = Math.sqrt(Math.max(0, meanSq[i] - m * m));
+    bin[i] = g[i] < m * (1 + k * (s / R - 1)) ? 1 : 0;
+  }
+  return bin;
+}
 /** 상자 흐림 (적분 영상, 반지름 r) */
 function boxBlur(src: Float32Array, w: number, h: number, r: number) {
   const I = new Float64Array((w + 1) * (h + 1));
@@ -307,19 +324,30 @@ export function enhance(c: HTMLCanvasElement, mode: Mode, clean = true) {
   // 글자 또렷하게 (언샤프 마스크)
   if (mode !== 'bw') { const bl = boxBlur(out, W, H, 1); for (let i = 0; i < n; i++) out[i] = Math.max(0, Math.min(255, out[i] + (out[i] - bl[i]) * 0.7)); }
   if (mode === 'bw') {
-    // 문턱값을 조금 낮춰 옅은 바탕무늬(워터마크)는 흰색으로, 남은 점은 지운다
-    // 대비를 먼저 늘린 뒤에 나눈다 (옅은 글자 사진도 글자가 남게)
-    for (let i = 0; i < n; i++) out[i] = curve(out[i]);
-    const th = Math.min(200, Math.max(105, otsu(out) - 6));
-    const bin = new Uint8Array(n); for (let i = 0; i < n; i++) bin[i] = out[i] < th ? 1 : 0;
+    // Sauvola 지역 적응 이진화: 글자 둘레의 평균·표준편차로 픽셀마다 문턱을 정해
+    // 그늘·불균일 조명·옅은 글자에도 글자는 검정, 바탕은 흰색으로 또렷하게 나눈다.
+    // 창 크기는 해상도에 맞추고(글자 둘레를 넉넉히 담게), '흐린 무늬 지우기'면 k를 높여 옅은 무늬를 더 지운다.
+    const rad = Math.max(14, Math.min(30, Math.round(Math.max(W, H) / 150)));
+    const bin = sauvola(out, W, H, rad, clean ? 0.12 : 0.1);
+    // 외톨이 점(잡티)만 지운다
+    const clone = bin.slice();
     for (let y = 1; y < H - 1; y++) for (let x = 1; x < W - 1; x++) {
-      const i = y * W + x; if (!bin[i]) continue;
-      const nb = bin[i - 1] + bin[i + 1] + bin[i - W] + bin[i + W] + bin[i - W - 1] + bin[i - W + 1] + bin[i + W - 1] + bin[i + W + 1];
-      if (nb <= 1) bin[i] = 2; // 외톨이 점
+      const i = y * W + x; if (!clone[i]) continue;
+      const nb = clone[i - 1] + clone[i + 1] + clone[i - W] + clone[i + W] + clone[i - W - 1] + clone[i - W + 1] + clone[i + W - 1] + clone[i + W + 1];
+      if (nb === 0) bin[i] = 0; // 완전히 외톨이인 점만
     }
-    for (let i = 0, j = 0; i < n; i++, j += 4) { const v = bin[i] === 1 ? 0 : 255; d[j] = d[j + 1] = d[j + 2] = v; }
+    for (let i = 0, j = 0; i < n; i++, j += 4) { const v = bin[i] ? 0 : 255; d[j] = d[j + 1] = d[j + 2] = v; }
   } else if (mode === 'gray') {
-    for (let i = 0, j = 0; i < n; i++, j += 4) { const v = curve(out[i]); d[j] = d[j + 1] = d[j + 2] = v; }
+    // 회색조: 전역 대비 곡선 + 지역 대비 보정(글자 둘레 평균을 기준으로 살짝 밀어 또렷하게).
+    // 그늘이 넓게 남은 곳의 글자도 주변 바탕과 또렷해진다 (CLAHE와 비슷한 효과를 가볍게).
+    const rad = Math.max(16, Math.min(60, Math.round(Math.max(W, H) / 110)));
+    const local = boxBlur(out, W, H, rad);
+    for (let i = 0, j = 0; i < n; i++, j += 4) {
+      const g = curve(out[i]), lm = curve(local[i]);
+      // 주변보다 어두우면(글자) 더 어둡게, 밝으면(바탕) 더 밝게 — 약하게
+      const v = Math.max(0, Math.min(255, g + (g - lm) * 0.4));
+      d[j] = d[j + 1] = d[j + 2] = v;
+    }
   } else {
     for (let i = 0, j = 0; i < n; i++, j += 4) {
       const gv = out[i], k = gv > 1 ? curve(gv) / gv : 1;
