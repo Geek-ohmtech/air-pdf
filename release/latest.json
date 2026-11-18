@@ -1,15 +1,15 @@
 {
-  "version": "0.8.4",
-  "notes": "용량 줄이기: 그림 많은 큰 스캔본에서 실패하던 문제 고침, 목표 용량(예: 20MB 이하) 설정 추가",
-  "pub_date": "2026-11-16T06:47:39Z",
+  "version": "0.8.5",
+  "notes": "스캔 보정 개선: 흑백은 Sauvola 지역 적응 이진화로 그늘진 휴대폰 사진에서도 옅은 글자를 살리고 바탕은 깨끗하게, 회색조는 지역 대비 보정으로 또렷하게",
+  "pub_date": "2026-11-18T02:36:41Z",
   "platforms": {
     "windows-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSZ1IvQktHdktZWmIwMWZiemVncHFpYS81MUZWVzRyM3JiR2tmd3NnT09obGVENkg3Mjh5dkVGd1lpNnhZL0Y3YWhxYzJISFkwci9QUkhwejJmSkx5dlpiZEg1emUyT3dFPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0ODExNjUyCWZpbGU6QWlyUERGXzAuOC40X3g2NC1zZXR1cC5leGUJdmVyc2lvbjowLjguNAo0VHI5a3owR1hJcjBDNUwzQjhBblhLL3BydHNSblpLWGM0L3dzWjJKMWlQYWZUT3dEdGVSa3IyemtnZmRVUXpCZVI2Nkl4ZzMrWWY5TVhFVmdYRXFDQT09Cg==",
-      "url": "https://raw.githubusercontent.com/Geek-ohmtech/air-pdf/main/release/AirPDF_0.8.4_x64-setup.exe"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSZ1IvQktHdktZWmFzNUVsM0E5RHhUZGEwOEtBVkEya01XTmtqa2hyYTc4VHRWVlFaOVZBWm1oczNoVCs2NzFoNUdZeVJKbmF2WFN1bE11TEtyS0NnM3REOVduT0JSc1EwPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0OTY5MzkzCWZpbGU6QWlyUERGXzAuOC41X3g2NC1zZXR1cC5leGUJdmVyc2lvbjowLjguNQpMTjhHMWRoQi9ialJrQ2RrTGV3ZTNKYzVDWGhjVEN0bCtJNGppWnY3ZE9vT0s5VnRTWCszaVMwMUc3T01zbEhiTzlFRmgwWmhpZWdmRUVId3dIdW1Cdz09Cg==",
+      "url": "https://raw.githubusercontent.com/Geek-ohmtech/air-pdf/main/release/AirPDF_0.8.5_x64-setup.exe"
     },
     "windows-x86_64-nsis": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSZ1IvQktHdktZWmIwMWZiemVncHFpYS81MUZWVzRyM3JiR2tmd3NnT09obGVENkg3Mjh5dkVGd1lpNnhZL0Y3YWhxYzJISFkwci9QUkhwejJmSkx5dlpiZEg1emUyT3dFPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0ODExNjUyCWZpbGU6QWlyUERGXzAuOC40X3g2NC1zZXR1cC5leGUJdmVyc2lvbjowLjguNAo0VHI5a3owR1hJcjBDNUwzQjhBblhLL3BydHNSblpLWGM0L3dzWjJKMWlQYWZUT3dEdGVSa3IyemtnZmRVUXpCZVI2Nkl4ZzMrWWY5TVhFVmdYRXFDQT09Cg==",
-      "url": "https://raw.githubusercontent.com/Geek-ohmtech/air-pdf/main/release/AirPDF_0.8.4_x64-setup.exe"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSZ1IvQktHdktZWmFzNUVsM0E5RHhUZGEwOEtBVkEya01XTmtqa2hyYTc4VHRWVlFaOVZBWm1oczNoVCs2NzFoNUdZeVJKbmF2WFN1bE11TEtyS0NnM3REOVduT0JSc1EwPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0OTY5MzkzCWZpbGU6QWlyUERGXzAuOC41X3g2NC1zZXR1cC5leGUJdmVyc2lvbjowLjguNQpMTjhHMWRoQi9ialJrQ2RrTGV3ZTNKYzVDWGhjVEN0bCtJNGppWnY3ZE9vT0s5VnRTWCszaVMwMUc3T01zbEhiTzlFRmgwWmhpZWdmRUVId3dIdW1Cdz09Cg==",
+      "url": "https://raw.githubusercontent.com/Geek-ohmtech/air-pdf/main/release/AirPDF_0.8.5_x64-setup.exe"
     }
   }
 }
